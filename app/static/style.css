@@ -2,11 +2,11 @@
    Variáveis de Cor e Tema
    ========================================= */
 :root {
-    --primary-blue: #0a2342;    /* Azul marinho profundo (profissional, confiável) */
-    --accent-blue: #0066cc;     /* Azul vibrante para botões e destaques */
-    --light-blue-bg: #eef2f7;   /* Fundo geral da página (não branco puro) */
+    --primary-blue: #0a2342; 
+    --accent-blue: #0066cc;   
+    --light-blue-bg: #eef2f7;  
     --white: #ffffff;
-    --text-dark: #2c3e50;       /* Cinza escuro para texto principal */
+    --text-dark: #2c3e50;       
     --text-muted: #6c757d;
     --border-color: #dee2e6;
     --card-shadow: 0 0.125rem 0.25rem rgba(0, 0, 0, 0.075);
@@ -69,7 +69,6 @@ a {
     border-color: var(--white);
 }
 
-
 /* =========================================
    Cards e Containers Profissionais
    ========================================= */
@@ -101,7 +100,7 @@ a {
     color: var(--primary-blue);
 }
 
-/* Efeito de hover apenas em cards interativos (como na dashboard) */
+/* Efeito de hover apenas em cards interativos */
 .project-card:hover {
     transform: translateY(-3px);
     box-shadow: var(--card-hover-shadow);
@@ -110,7 +109,6 @@ a {
 /* =========================================
    Botões e Controles
    ========================================= */
-/* Sobrescrevendo o botão primário do Bootstrap para o nosso azul */
 .btn-primary {
     background-color: var(--accent-blue);
     border-color: var(--accent-blue);
@@ -119,12 +117,12 @@ a {
 }
 
 .btn-primary:hover {
-    background-color: #004c99; /* Um tom mais escuro que o #0066cc */
+    background-color: #004c99; 
     border-color: #004c99;
 }
 
 .btn-success {
-    background-color: #28a745; /* Verde um pouco mais vibrante */
+    background-color: #28a745; 
 }
 
 .btn-danger {
@@ -141,7 +139,7 @@ a {
    Página de Login
    ========================================= */
 .login-container {
-    min-height: 80vh; /* Centraliza verticalmente */
+    min-height: 80vh;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -168,15 +166,33 @@ a {
     margin-bottom: 0.5rem;
 }
 
-/* Logs Terminal */
+/* Logs Terminal - Estilo VS Code / Hacker */
 .log-container {
-    background-color: #1e1e1e; /* Fundo mais escuro estilo VS Code */
-    color: #d4d4d4;
-    font-family: 'Consolas', 'Courier New', monospace;
+    background-color: #1e1e1e;
+    color: #00ff41; /* Verde Matrix */
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
     padding: 1rem;
     border-radius: 0.5rem;
-    box-shadow: inset 0 0 10px rgba(0,0,0,0.5);
+    box-shadow: inset 0 0 10px rgba(0,0,0,0.8);
     font-size: 0.9rem;
+    max-height: 400px; /* Altura máxima */
+    overflow-y: auto;  /* Adiciona scroll se passar da altura */
+    border: 1px solid #333;
+}
+
+/* Scrollbar Customizada */
+.log-container::-webkit-scrollbar {
+    width: 8px;
+}
+.log-container::-webkit-scrollbar-track {
+    background: #1e1e1e;
+}
+.log-container::-webkit-scrollbar-thumb {
+    background: #444;
+    border-radius: 4px;
+}
+.log-container::-webkit-scrollbar-thumb:hover {
+    background: #555;
 }
 
 /* Navegação de Abas (Pills) */
@@ -190,7 +206,7 @@ a {
 }
 
 .nav-pills .nav-link:hover {
-    background-color: rgba(0, 102, 204, 0.1); /* Azul bem clarinho no hover */
+    background-color: rgba(0, 102, 204, 0.1); 
     color: var(--accent-blue);
 }
 
@@ -201,14 +217,25 @@ a {
 }
 
 /* Tabelas (Domínios e Vulns) */
+.table-responsive {
+    max-height: 600px;
+    overflow-y: auto;
+    border-radius: 0.5rem;
+}
+
 .table-custom thead th {
-    background-color: #f8f9fa; /* Cabeçalho cinza bem claro */
+    background-color: #f8f9fa; 
     color: var(--primary-blue);
     border-top: none;
     font-weight: 600;
     text-transform: uppercase;
     font-size: 0.85rem;
     letter-spacing: 0.5px;
+    /* Sticky Header */
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    box-shadow: 0 2px 2px -1px rgba(0, 0, 0, 0.1);
 }
 
 .table-custom tbody tr {
@@ -216,7 +243,7 @@ a {
 }
 
 .table-custom tbody tr:hover {
-    background-color: rgba(0, 102, 204, 0.03); /* Hover azul super sutil */
+    background-color: rgba(0, 102, 204, 0.03); 
 }
 
 .table td, .table th {
@@ -228,21 +255,36 @@ a {
 .badge {
     padding: 0.5em 0.8em;
     font-weight: 600;
-    letter-spacing: 0.3px;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    font-size: 0.75rem;
 }
-/* Cores específicas para severidade se o Bootstrap não tiver */
-.bg-critical { background-color: #d9534f; color: white; }
-.bg-high { background-color: #f0ad4e; color: white; }
-.bg-medium { background-color: #5bc0de; color: white; }
-.bg-low { background-color: #999; color: white; }
-.bg-info { background-color: #5bc0de; color: white; }
+
+/* Cores e Efeitos */
+.bg-critical {
+    background-color: #dc3545;
+    color: white;
+    box-shadow: 0 0 8px rgba(220, 53, 69, 0.6);
+    animation: pulse-red 2s infinite;
+}
+
+.bg-high { background-color: #fd7e14; color: white; }
+.bg-medium { background-color: #ffc107; color: #212529; }
+.bg-low { background-color: #17a2b8; color: white; }
+.bg-info { background-color: #6c757d; color: white; }
+
+@keyframes pulse-red {
+    0% { box-shadow: 0 0 0 0 rgba(220, 53, 69, 0.7); }
+    70% { box-shadow: 0 0 0 6px rgba(220, 53, 69, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(220, 53, 69, 0); }
+}
 
 /* Efeito Hover na Lixeira */
 .hover-danger {
     transition: color 0.2s ease;
 }
 .hover-danger:hover {
-    color: #dc3545 !important; /* Vermelho Bootstrap */
+    color: #dc3545 !important;
     transform: scale(1.1);
 }
 
@@ -262,79 +304,9 @@ a {
 }
 
 /* =========================================
-   ALERTAS E NOTIFICAÇÕES (TOAST STYLE)
+   ALERTAS E NOTIFICAÇÕES (Toast Style)
    ========================================= */
 
-/* Container do alerta */
-.alert-custom {
-    background-color: #ffffff;
-    border: none;
-    border-left: 5px solid #ccc; /* Cor padrão */
-    border-radius: 6px;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08); /* Sombra suave */
-    padding: 1rem 1.25rem;
-    margin-bottom: 1.5rem;
-    display: flex;
-    align-items: center;
-    position: relative;
-    animation: slideInDown 0.4s ease-out;
-}
-
-/* Animação de entrada */
-@keyframes slideInDown {
-    from { opacity: 0; transform: translateY(-20px); }
-    to { opacity: 1; transform: translateY(0); }
-}
-
-/* Ícone dentro do alerta */
-.alert-icon-box {
-    margin-right: 1rem;
-    font-size: 1.5rem;
-    display: flex;
-    align-items: center;
-}
-
-/* Texto da mensagem */
-.alert-message {
-    flex-grow: 1;
-    color: var(--text-dark);
-    font-weight: 500;
-}
-
-/* Botão de fechar */
-.alert-dismiss-btn {
-    background: none;
-    border: none;
-    color: #999;
-    font-size: 1.1rem;
-    cursor: pointer;
-    padding: 0;
-    margin-left: 1rem;
-    transition: color 0.2s;
-}
-.alert-dismiss-btn:hover { color: #333; }
-
-/* --- VARIAÇÕES DE TIPO --- */
-
-/* Sucesso (Verde) */
-.alert-success { border-left-color: #10b981; }
-.alert-success .alert-icon-box { color: #10b981; }
-
-/* Erro (Vermelho) */
-.alert-error, .alert-danger { border-left-color: #ef4444; }
-.alert-error .alert-icon-box, .alert-danger .alert-icon-box { color: #ef4444; }
-
-/* Aviso (Amarelo/Laranja) */
-.alert-warning { border-left-color: #f59e0b; }
-.alert-warning .alert-icon-box { color: #f59e0b; }
-
-/* Info (Azul) */
-.alert-info { border-left-color: #3b82f6; }
-.alert-info .alert-icon-box { color: #3b82f6; }
-
-/* --- ADICIONE AO FINAL DO ARQUIVO --- */
-
-/* Notificações Profissionais (Toast Style) */
 .alert-custom {
     background-color: #ffffff;
     border: none;
@@ -363,7 +335,7 @@ a {
     width: 40px;
     height: 40px;
     border-radius: 50%;
-    background-color: #f8f9fa; /* Fundo cinza suave para o ícone */
+    background-color: #f8f9fa; 
 }
 
 .alert-message {
@@ -395,3 +367,20 @@ a {
 
 .alert-info { border-left-color: #3b82f6; }
 .alert-info .alert-icon-box { color: #3b82f6; background-color: rgba(59, 130, 246, 0.1); }
+
+/* =========================================
+   SKELETON LOADING (HTMX INDICATOR)
+   ========================================= */
+
+/* Quando o wrapper estiver carregando (htmx-request) */
+#domains-wrapper.htmx-request #domains-content {
+    display: none !important; /* Esconde a tabela real */
+}
+
+#domains-wrapper.htmx-request #domains-skeleton {
+    display: block !important; /* Mostra o esqueleto */
+}
+
+.placeholder {
+    opacity: 0.3; /* Deixa cinza clarinho */
+}

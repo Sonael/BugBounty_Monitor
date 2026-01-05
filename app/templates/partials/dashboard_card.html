@@ -1,0 +1,119 @@
+{% set pendentes = project.domains | selectattr('scanned_vulns', 'equalto', False) | selectattr('status_code', 'in', [200, 201, 202, 204, 301, 302, 307, 308]) | list | length %}
+{% set count_2xx = project.domains | selectattr('status_code', 'ge', 200) | selectattr('status_code', 'lt', 300) | list | length %}
+{% set count_3xx = project.domains | selectattr('status_code', 'ge', 300) | selectattr('status_code', 'lt', 400) | list | length %}
+{% set count_4xx = project.domains | selectattr('status_code', 'ge', 400) | selectattr('status_code', 'lt', 500) | list | length %}
+{% set count_5xx = project.domains | selectattr('status_code', 'ge', 500) | list | length %}
+
+{% set ns = namespace(total_vulns=0) %}
+{% for d in project.domains %}
+    {% set ns.total_vulns = ns.total_vulns + d.vulnerabilities|length %}
+{% endfor %}
+
+<div class="col-md-4 mb-4" 
+     id="project-card-{{ project.id }}"
+     hx-get="{{ url_for('main.project_card_part', id=project.id) }}?t={{ range(1, 10000) | random }}"
+     hx-trigger="every 3s" 
+     hx-swap="outerHTML">
+     
+    <div class="card h-100 project-card border-0 shadow-sm position-relative">
+        <div class="card-body p-4 d-flex flex-column h-100">
+            
+            <div class="d-flex justify-content-between align-items-start mb-3">
+                {% if project.scan_status == 'Rodando' %}
+                    <span class="badge bg-primary bg-opacity-10 text-primary border border-primary rounded-pill animate-pulse">
+                        <i class="fas fa-sync fa-spin me-1"></i> Rodando
+                    </span>
+                {% elif project.scan_status == 'Erro' %}
+                    <span class="badge bg-danger bg-opacity-10 text-danger border border-danger rounded-pill">
+                         <i class="fas fa-exclamation-circle me-1"></i> Erro
+                    </span>
+                {% else %}
+                    <span class="badge bg-light text-secondary border rounded-pill">
+                        {% if project.scan_status == 'Concluído' %}
+                             <i class="fas fa-check-circle me-1 text-success"></i> Pronto
+                        {% else %}
+                             <i class="fas fa-pause-circle me-1"></i> Parado
+                        {% endif %}
+                    </span>
+                {% endif %}
+
+                <button class="btn btn-link text-muted p-0 hover-danger" 
+                        data-bs-toggle="modal" 
+                        data-bs-target="#deleteModal{{ project.id }}" 
+                        title="Excluir Projeto">
+                    <i class="fas fa-trash-alt"></i>
+                </button>
+            </div>
+
+            <h5 class="card-title fw-bold text-dark mb-1">{{ project.name }}</h5>
+            
+            {% if project.scan_status == 'Rodando' %}
+                <div class="text-primary small mb-4 fw-bold text-truncate">
+                     {{ project.scan_message }}
+                </div>
+            {% else %}
+                <div class="text-muted font-monospace small mb-4">
+                    <i class="fas fa-globe me-1 opacity-50"></i> {{ project.target_url }}
+                </div>
+            {% endif %}
+            
+            {% if pendentes > 0 %}
+            <div class="alert alert-warning d-flex align-items-center p-2 small border-warning bg-warning bg-opacity-10 mb-3 rounded">
+                <i class="fas fa-bell me-2 text-warning animate-swing"></i>
+                <div class="fw-bold text-dark lh-1">
+                    {{ pendentes }} novos subdomínios (Alvos Válidos)!<br>
+                    <span class="fw-normal text-muted" style="font-size: 0.8em;">Precisam de scan</span>
+                </div>
+            </div>
+            {% endif %}
+            
+            <div class="d-flex justify-content-between align-items-center pt-3 border-top mt-auto">
+                
+                <div class="d-flex align-items-center flex-wrap gap-2">
+                    
+                    <div class="small text-muted fw-bold" title="Total de subdomínios descobertos">
+                        <i class="fas fa-sitemap me-1"></i>{{ project.domains|length }}
+                    </div>
+
+                    {% if count_2xx > 0 or count_3xx > 0 or count_4xx > 0 or count_5xx > 0 or ns.total_vulns > 0 %}
+                        <div class="text-muted opacity-25">|</div>
+                    {% endif %}
+
+                    {% if ns.total_vulns > 0 %}
+                    <span class="badge bg-danger rounded-pill" title="Total de Vulnerabilidades">
+                        <i class="fas fa-bug"></i> {{ ns.total_vulns }}
+                    </span>
+                    {% endif %}
+
+                    {% if count_2xx > 0 %}
+                    <span class="badge bg-success bg-opacity-10 text-success border border-success rounded-pill" title="Status 2xx (Sucesso)">
+                        2xx: {{ count_2xx }}
+                    </span>
+                    {% endif %}
+
+                    {% if count_3xx > 0 %}
+                    <span class="badge bg-info bg-opacity-10 text-info border border-info rounded-pill" title="Status 3xx (Redirects)">
+                        3xx: {{ count_3xx }}
+                    </span>
+                    {% endif %}
+
+                    {% if count_4xx > 0 %}
+                    <span class="badge bg-warning bg-opacity-10 text-warning border border-warning rounded-pill" title="Status 4xx (Client Error)">
+                        4xx: {{ count_4xx }}
+                    </span>
+                    {% endif %}
+
+                    {% if count_5xx > 0 %}
+                    <span class="badge bg-dark text-white rounded-pill" title="Status 5xx (Server Error)">
+                        5xx: {{ count_5xx }}
+                    </span>
+                    {% endif %}
+                </div>
+                
+                <a href="{{ url_for('main.project_details', id=project.id) }}" class="btn btn-sm btn-outline-primary fw-bold rounded-pill px-3 ms-2">
+                    Gerenciar
+                </a>
+            </div>
+        </div>
+    </div>
+</div>

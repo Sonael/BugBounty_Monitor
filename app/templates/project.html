@@ -1,0 +1,195 @@
+{% extends "base.html" %}
+
+{% block content %}
+
+<div class="card border-0 shadow-sm mb-4">
+    <div class="card-body p-4">
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <a href="{{ url_for('main.dashboard') }}" class="btn btn-outline-secondary btn-sm fw-bold shadow-sm">
+                <i class="fas fa-arrow-left me-2"></i>Voltar para Dashboard
+            </a>
+            <button type="button" class="btn btn-outline-danger btn-sm fw-bold shadow-sm" data-bs-toggle="modal"
+                data-bs-target="#deleteModal">
+                <i class="fas fa-trash-alt me-2"></i>Excluir Projeto
+            </button>
+        </div>
+
+        <div class="row align-items-center">
+            <div class="col-md-5">
+                <h2 class="display-6 fw-bold text-primary mb-0" style="letter-spacing: -1px;">{{ project.name }}</h2>
+                <div class="d-flex align-items-center text-muted mt-1">
+                    <span class="badge bg-light text-dark border me-2">ALVO</span>
+                    <span class="font-monospace">{{ project.target_url }}</span>
+                </div>
+            </div>
+            <div class="col-md-7">
+                <div class="d-flex justify-content-end">
+                    <div style="width: 100%; max-width: 500px;">
+                        {% include 'partials/controls.html' %}
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% include 'partials/status_card.html' %}
+
+<div class="card border-0 shadow-sm">
+    <div class="card-header bg-white border-bottom-0 pt-4 px-4">
+        <ul class="nav nav-pills" id="projectTabs" role="tablist">
+            <li class="nav-item me-2">
+                <button class="nav-link active fw-bold border" id="vulns-tab" data-bs-toggle="pill"
+                    data-bs-target="#vulns" type="button">
+                    <i class="fas fa-bug me-2"></i>Vulnerabilidades
+                </button>
+            </li>
+            <li class="nav-item">
+                <button class="nav-link fw-bold border" id="domains-tab" data-bs-toggle="pill" data-bs-target="#domains"
+                    type="button">
+                    <i class="fas fa-sitemap me-2"></i>Subdomínios
+
+                    <span class="badge bg-secondary ms-2 rounded-pill"
+                        hx-get="{{ url_for('main.count_domains', id=project.id) }}" hx-trigger="every 2s"
+                        hx-swap="innerHTML">
+                        {{ stats.total }}
+                    </span>
+                </button>
+            </li>
+        </ul>
+    </div>
+
+    <div class="card-body p-4">
+        <div class="tab-content" id="projectTabsContent">
+
+            <div class="tab-pane fade show active" id="vulns">
+                <div class="table-responsive rounded border">
+                    <table class="table table-custom table-hover align-middle mb-0">
+                        <thead>
+                            <tr>
+                                <th class="text-center bg-light" style="width: 100px;">Nível</th>
+                                <th class="bg-light" style="width: 120px;">Ferramenta</th>
+                                <th class="bg-light">Detalhes da Falha</th>
+                                <th class="bg-light" style="width: 200px;">Local</th>
+                            </tr>
+                        </thead>
+                        <tbody hx-get="{{ url_for('main.project_vulns_part', id=project.id) }}" hx-trigger="every 5s"
+                            hx-swap="innerHTML">
+                            {% include 'partials/vulns_list.html' %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div class="tab-pane fade" id="domains">
+                <div class="d-flex flex-wrap gap-2 mb-4" id="filter-group"
+                    hx-get="{{ url_for('main.project_stats', id=project.id) }}" hx-trigger="every 5s" hx-swap="none"
+                    hx-on::after-request="updateBadges(event)">
+
+                    <button class="btn btn-outline-secondary btn-sm filter-btn active px-3 rounded-pill"
+                        onclick="setActive(this)" hx-get="{{ url_for('main.project_domains_part', id=project.id) }}"
+                        hx-target="#domains-list" hx-swap="outerHTML">
+                        Todos <span id="stat-total" class="badge bg-secondary ms-1">{{ stats.total }}</span>
+                    </button>
+
+                    <button class="btn btn-outline-success btn-sm filter-btn px-3 rounded-pill"
+                        onclick="setActive(this)"
+                        hx-get="{{ url_for('main.project_domains_part', id=project.id, status='ok') }}"
+                        hx-target="#domains-list" hx-swap="outerHTML">
+                        <i class="fas fa-check-circle me-1"></i>200 OK
+                        <span id="stat-ok" class="badge bg-success ms-1">{{ stats.ok }}</span>
+                    </button>
+
+                    <button class="btn btn-outline-info btn-sm filter-btn px-3 rounded-pill" onclick="setActive(this)"
+                        hx-get="{{ url_for('main.project_domains_part', id=project.id, status='redirect') }}"
+                        hx-target="#domains-list" hx-swap="outerHTML">
+                        <i class="fas fa-exchange-alt me-1"></i>Redirects
+                        <span id="stat-redirect" class="badge bg-info ms-1">{{ stats.redirect }}</span>
+                    </button>
+
+                    <button class="btn btn-outline-warning btn-sm filter-btn px-3 rounded-pill"
+                        onclick="setActive(this)"
+                        hx-get="{{ url_for('main.project_domains_part', id=project.id, status='error') }}"
+                        hx-target="#domains-list" hx-swap="outerHTML">
+                        <i class="fas fa-exclamation-triangle me-1"></i>Erros (4xx/5xx)
+                        <span id="stat-error" class="badge bg-warning text-dark ms-1">{{ stats.error }}</span>
+                    </button>
+
+                    <button class="btn btn-outline-dark btn-sm filter-btn px-3 rounded-pill" onclick="setActive(this)"
+                        hx-get="{{ url_for('main.project_domains_part', id=project.id, status='dead') }}"
+                        hx-target="#domains-list" hx-swap="outerHTML">
+                        <i class="fas fa-skull-crossbones me-1"></i>Sem Resposta
+                        <span id="stat-dead" class="badge bg-dark ms-1">{{ stats.dead }}</span>
+                    </button>
+                </div>
+
+                <script>
+                    function updateBadges(evt) {
+                        // Verifica se a requisição deu certo
+                        if (evt.detail.successful) {
+                            // Converte a resposta texto para JSON
+                            const data = JSON.parse(evt.detail.xhr.responseText);
+
+                            // Atualiza os textos dos badges pelos IDs
+                            document.getElementById('stat-total').innerText = data.total;
+                            document.getElementById('stat-ok').innerText = data.ok;
+                            document.getElementById('stat-redirect').innerText = data.redirect;
+                            document.getElementById('stat-error').innerText = data.error;
+                            document.getElementById('stat-dead').innerText = data.dead;
+                        }
+                    }
+
+                    function setActive(clickedBtn) {
+                        document.querySelectorAll('#filter-group .filter-btn').forEach(btn => btn.classList.remove('active', 'fw-bold'));
+                        clickedBtn.classList.add('active', 'fw-bold');
+                    }
+                </script>
+
+                {% include 'partials/domains_list.html' %}
+
+                <script>
+                    function setActive(clickedBtn) {
+                        document.querySelectorAll('#filter-group .filter-btn').forEach(btn => btn.classList.remove('active', 'fw-bold'));
+                        clickedBtn.classList.add('active', 'fw-bold');
+                    }
+                </script>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="deleteModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content border-0 shadow-lg">
+            <div class="modal-header bg-danger text-white">
+                <h5 class="modal-title fw-bold"><i class="fas fa-exclamation-triangle me-2"></i>Zona de Perigo</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body p-4">
+                <p class="mb-3">Você está prestes a excluir o projeto <strong>{{ project.name }}</strong>
+                    permanentemente.</p>
+                <div class="alert alert-danger bg-danger bg-opacity-10 border-danger text-danger">
+                    <ul class="mb-0 small">
+                        <li>
+                            Todos os 
+                            <strong hx-get="{{ url_for('main.count_domains', id=project.id) }}" 
+                                    hx-trigger="every 2s" 
+                                    hx-swap="innerHTML">
+                                {{ project.domains|length }}
+                            </strong> 
+                            subdomínios serão perdidos.
+                        </li>
+                        <li>O histórico de vulnerabilidades será apagado.</li>
+                    </ul>
+                </div>
+            </div>
+            <div class="modal-footer bg-light">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+                <form action="{{ url_for('main.delete_project', id=project.id) }}" method="POST">
+                    <button type="submit" class="btn btn-danger fw-bold">Sim, Apagar Tudo</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

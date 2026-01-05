@@ -1,0 +1,147 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-end mb-5">
+    <div>
+        <h2 class="display-6 fw-bold text-primary mb-0" style="letter-spacing: -1px;">Dashboard</h2>
+        <p class="text-muted mb-0">Visão geral dos seus alvos e status de monitoramento.</p>
+    </div>
+
+    <div class="d-flex align-items-center gap-3">
+        <div class="bg-white px-3 py-2 rounded shadow-sm d-flex align-items-center border"
+            title="Tempo restante para o scan diário automático (00:00)">
+            <div class="bg-primary bg-opacity-10 p-2 rounded-circle me-3 text-primary">
+                <i class="fas fa-hourglass-half animate-pulse"></i>
+            </div>
+            <div class="lh-1">
+                <span class="d-block text-muted fw-bold text-uppercase mb-1"
+                    style="font-size: 0.65rem; letter-spacing: 0.5px;">
+                    Próximo Scan Global
+                </span>
+                <span id="scan-timer" class="fw-bold font-monospace text-dark fs-5">--:--:--</span>
+            </div>
+        </div>
+
+        <button class="btn btn-primary shadow-sm fw-bold px-4 py-2" data-bs-toggle="modal"
+            data-bs-target="#newProjectModal">
+            <i class="fas fa-plus-circle me-2"></i>Novo Alvo
+        </button>
+    </div>
+</div>
+
+<div class="row">
+    {% for project in projects %}
+        {% include 'partials/dashboard_card.html' %}
+
+        <div class="modal fade" id="deleteModal{{ project.id }}" tabindex="-1">
+            <div class="modal-dialog modal-sm modal-dialog-centered">
+                <div class="modal-content border-0 shadow-lg">
+                    <div class="modal-header bg-danger text-white border-0 py-2">
+                        <h6 class="modal-title fw-bold"><i class="fas fa-trash-alt me-2"></i>Excluir Alvo</h6>
+                        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                    </div>
+                    <div class="modal-body text-center p-4">
+                        <p class="mb-0">Tem certeza que deseja apagar o projeto<br><strong>{{ project.name }}</strong>?</p>
+                        <small class="text-danger">Isso não pode ser desfeito.</small>
+                    </div>
+                    <div class="modal-footer justify-content-center border-0 bg-light py-2">
+                        <button type="button" class="btn btn-sm btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+                        <form action="{{ url_for('main.delete_project', id=project.id) }}" method="POST">
+                            <button type="submit" class="btn btn-sm btn-danger fw-bold">Sim, Excluir</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    {% else %}
+        <div class="col-12 text-center py-5">
+            <div class="text-muted opacity-25">
+                <i class="fas fa-folder-open fa-4x mb-3"></i>
+                <h3>Nenhum projeto encontrado.</h3>
+                <p>Clique em "Novo Alvo" para começar seu monitoramento.</p>
+            </div>
+        </div>
+    {% endfor %}
+</div>
+
+<div class="modal fade" id="newProjectModal" tabindex="-1">
+    <div class="modal-dialog">
+        <form method="POST" action="{{ url_for('main.new_project') }}">
+            <div class="modal-content border-0 shadow-lg">
+                <div class="modal-header bg-primary text-white">
+                    <h5 class="modal-title fw-bold"><i class="fas fa-plus-circle me-2"></i>Adicionar Novo Alvo</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body p-4">
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Nome do Projeto</label>
+                        <input type="text" name="name" class="form-control" placeholder="Ex: Programa BugBounty X"
+                            required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Domínio Principal (Escopo)</label>
+                        <div class="input-group">
+                            <span class="input-group-text bg-light"><i class="fas fa-globe"></i></span>
+                            <input type="text" name="target" class="form-control" placeholder="Ex: alvo.com" required>
+                        </div>
+                        <div class="form-text text-muted">Não inclua http:// ou https://</div>
+                    </div>
+                </div>
+                <div class="modal-footer bg-light">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+                    <button type="submit" class="btn btn-primary fw-bold px-4">Criar Projeto</button>
+                </div>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+    document.addEventListener("DOMContentLoaded", function () {
+        function updateCountdown() {
+            const now = new Date();
+            // Cria uma data para "Amanhã"
+            const tomorrow = new Date(now);
+            tomorrow.setDate(tomorrow.getDate() + 1);
+            tomorrow.setHours(0, 0, 0, 0); // Meia noite exata
+
+            const diff = tomorrow - now;
+
+            if (diff <= 0) {
+                // Se o tempo passou, reseta para o próximo dia
+                return;
+            }
+
+            // Cálculos
+            const hours = Math.floor(diff / (1000 * 60 * 60));
+            const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+            const seconds = Math.floor((diff % (1000 * 60)) / 1000);
+
+            const hStr = hours.toString().padStart(2, '0');
+            const mStr = minutes.toString().padStart(2, '0');
+            const sStr = seconds.toString().padStart(2, '0');
+
+            const timerElement = document.getElementById('scan-timer');
+            if (timerElement) {
+                timerElement.textContent = `${hStr}h ${mStr}m ${sStr}s`;
+
+                // Muda cor se faltar pouco tempo
+                if (hours < 1) {
+                    timerElement.classList.add('text-danger');
+                    timerElement.classList.remove('text-dark');
+                } else {
+                    timerElement.classList.remove('text-danger');
+                    timerElement.classList.add('text-dark');
+                }
+            } else {
+                console.warn("Elemento #scan-timer não encontrado!");
+            }
+        }
+
+        // Inicia o timer
+        setInterval(updateCountdown, 1000);
+        updateCountdown();
+    });
+</script>
+{% endblock %}

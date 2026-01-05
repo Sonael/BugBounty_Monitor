@@ -1,0 +1,40 @@
+{% for domain in project.domains %}
+    {% for vuln in domain.vulnerabilities %}
+    <tr class="align-middle">
+        <td class="text-center">
+            <span class="vuln-badge vuln-{{ vuln.severity }}">
+                {{ vuln.severity }}
+            </span>
+        </td>
+        
+        <td class="text-secondary fw-bold small">
+            <i class="fas fa-toolbox me-1 opacity-50"></i> {{ vuln.tool }}
+        </td>
+        
+        <td>
+            <div class="text-dark fw-bold mb-1">{{ vuln.name }}</div>
+            <div class="text-muted small" style="line-height: 1.4;">
+                {{ vuln.description }}
+            </div>
+        </td>
+        
+        <td>
+            <a href="http://{{ domain.name }}" target="_blank" class="text-decoration-none fw-bold text-primary">
+                {{ domain.name }} <i class="fas fa-external-link-alt ms-1 small opacity-50"></i>
+            </a>
+        </td>
+    </tr>
+    {% endfor %}
+{% endfor %}
+
+{% if not project.domains|map(attribute='vulnerabilities')|sum(start=[]) %}
+    <tr>
+        <td colspan="4" class="text-center py-5">
+            <div class="text-muted opacity-50">
+                <i class="fas fa-check-shield fa-3x mb-3"></i>
+                <p class="mb-0 fw-bold">Nenhuma vulnerabilidade detectada.</p>
+                <small>Seu perímetro parece seguro por enquanto.</small>
+            </div>
+        </td>
+    </tr>
+{% endif %}

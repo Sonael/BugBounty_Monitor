@@ -1,0 +1,116 @@
+<div class="table-responsive" id="domains-list"
+    hx-get="{{ url_for('main.project_domains_part', id=project.id, status=current_status) }}" hx-trigger="every 5s"
+    hx-swap="outerHTML">
+
+    <table class="table table-hover align-middle mb-0">
+        <thead class="bg-light">
+            <tr>
+                <th class="border-0 text-secondary small fw-bold text-uppercase ps-4">Subdomínio</th>
+                <th class="border-0 text-secondary small fw-bold text-uppercase text-center">Status / Portas</th>
+                <th class="border-0 text-secondary small fw-bold text-uppercase">Tecnologias</th>
+                <th class="border-0 text-secondary small fw-bold text-uppercase">PATHS (FFuf)</th>
+                <th class="border-0 text-secondary small fw-bold text-uppercase text-end pe-4">Descoberto</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for domain in domains %}
+            <tr>
+                <td class="ps-4">
+                    <a href="http://{{ domain.name }}" target="_blank" class="fw-bold text-dark text-decoration-none">
+                        {{ domain.name }}
+                    </a>
+
+                    {% if domain.ip_address %}
+                    <div class="text-muted small mt-1 font-monospace">
+                        <i class="fas fa-network-wired me-1 text-primary opacity-50"></i> {{ domain.ip_address }}
+                    </div>
+                    {% endif %}
+
+                    {% if domain.dns_info %}
+                    <div class="mt-1">
+                        {% for info in domain.dns_info.split(' | ') %}
+                            <div class="d-flex align-items-start text-muted small font-monospace text-break mb-1">
+                                {% if 'MX' in info %}
+                                    <i class="fas fa-envelope me-2 mt-1 text-warning opacity-50" title="MX Record"></i>
+                                {% elif 'CNAME' in info %}
+                                    <i class="fas fa-route me-2 mt-1 text-info opacity-50" title="CNAME Record"></i>
+                                {% else %}
+                                    <i class="fas fa-info-circle me-2 mt-1 opacity-50"></i>
+                                {% endif %}
+                                
+                                <span>{{ info }}</span>
+                            </div>
+                        {% endfor %}
+                    </div>
+                    {% endif %}
+                </td>
+
+                <td class="text-center">
+                    {% if domain.status_code %}
+                        {% if domain.status_code < 300 %} 
+                            <span class="badge bg-success bg-opacity-10 text-success border border-success">{{ domain.status_code }}</span>
+                        {% elif domain.status_code < 400 %} 
+                            <span class="badge bg-info bg-opacity-10 text-info border border-info">{{ domain.status_code }}</span>
+                        {% elif domain.status_code < 500 %} 
+                            <span class="badge bg-warning bg-opacity-10 text-warning border border-warning">{{ domain.status_code }}</span>
+                        {% else %}
+                            <span class="badge bg-danger bg-opacity-10 text-danger border border-danger">{{ domain.status_code }}</span>
+                        {% endif %}
+                    {% else %}
+                        <span class="badge bg-light text-muted border">-</span>
+                    {% endif %}
+
+                    {% if domain.open_ports %}
+                    <div class="mt-2 d-flex justify-content-center flex-wrap gap-1">
+                        {% for port in domain.open_ports.split(', ') %}
+                        <span class="badge bg-primary bg-opacity-10 text-primary border border-primary fw-normal" style="font-size: 0.7em;">:{{ port }}</span>
+                        {% endfor %}
+                    </div>
+                    {% endif %}
+                </td>
+
+                <td>
+                    {% if domain.technologies %}
+                    <div class="d-flex flex-wrap gap-1">
+                        {% for tech in domain.technologies.split(', ') %}
+                        <span class="badge border fw-normal text-dark bg-light" style="font-size: 0.75rem;">
+                            {{ tech }}
+                        </span>
+                        {% endfor %}
+                    </div>
+                    {% else %}
+                    <span class="text-muted opacity-25 small">-</span>
+                    {% endif %}
+                </td>
+
+                <td style="max-width: 250px;">
+                    {% if domain.discovered_paths %}
+                        <div class="d-flex flex-wrap gap-1">
+                            {% for path in domain.discovered_paths.split(',') %}
+                                <a href="http://{{ domain.name }}{{ path.strip() }}" target="_blank" 
+                                   class="badge bg-secondary text-decoration-none" 
+                                   title="Abrir {{ path.strip() }}">
+                                    <i class="fas fa-external-link-alt me-1" style="font-size: 0.6em;"></i>{{ path.strip() }}
+                                </a>
+                            {% endfor %}
+                        </div>
+                    {% else %}
+                        <span class="text-muted opacity-25 small">-</span>
+                    {% endif %}
+                </td>
+
+                <td class="text-end pe-4 text-muted small">
+                    {{ domain.first_seen.strftime('%d/%m %H:%M') }}
+                </td>
+            </tr>
+            {% else %}
+            <tr>
+                <td colspan="5" class="text-center py-5 text-muted">
+                    <i class="fas fa-search fa-2x mb-3 opacity-25"></i>
+                    <p class="mb-0">Nenhum resultado encontrado.</p>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>

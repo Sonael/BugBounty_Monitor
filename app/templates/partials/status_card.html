@@ -1,0 +1,44 @@
+<div class="card border-0 shadow-sm mb-4" id="status-card"
+     hx-get="{{ url_for('main.project_status_part', id=project.id) }}"
+     hx-trigger="every 2s"
+     hx-swap="outerHTML">
+
+    <div class="card-body text-center p-4">
+        <h6 class="text-uppercase text-muted fw-bold small mb-3 letter-spacing-1">Status Atual do Processo</h6>
+        
+        {% if project.scan_status == 'Rodando' %}
+            <div class="my-3">
+                <div class="spinner-grow text-primary mb-3" style="width: 3rem; height: 3rem;" role="status"></div>
+                <h4 class="text-primary fw-bold">{{ project.scan_message }}</h4>
+                <p class="text-muted small animate-pulse">
+                    <i class="fas fa-sync fa-spin me-1"></i> Atualizando logs em tempo real...
+                </p>
+            </div>
+        
+        {% elif project.scan_status == 'Erro' %}
+            <div class="py-2">
+                <i class="fas fa-times-circle fa-3x text-danger mb-3"></i>
+                <h4 class="text-danger fw-bold">Falha na Execução</h4>
+                <p class="text-dark bg-danger bg-opacity-10 p-2 rounded border border-danger">
+                    {{ project.scan_message }}
+                </p>
+            </div>
+        
+        {% elif project.scan_status == 'Concluído' %}
+            <div class="py-2">
+                <i class="fas fa-check-circle fa-3x text-success mb-3"></i>
+                <h4 class="text-success fw-bold">{{ project.scan_message }}</h4>
+                <p class="text-muted small mb-0">
+                    <i class="far fa-clock me-1"></i> Finalizado em: {{ project.last_scan_date.strftime('%d/%m/%Y às %H:%M') if project.last_scan_date else 'Agora' }}
+                </p>
+            </div>
+
+        {% else %}
+            <div class="py-2 opacity-50">
+                <i class="fas fa-power-off fa-3x mb-3 text-secondary"></i>
+                <h4 class="text-secondary">Aguardando Início</h4>
+                <small class="text-muted">Selecione uma ação no painel de controle.</small>
+            </div>
+        {% endif %}
+    </div>
+</div>

@@ -1,0 +1,90 @@
+<div id="scan-controls" 
+     hx-get="{{ url_for('main.project_controls_part', id=project.id) }}" 
+     hx-trigger="every 2s" 
+     hx-swap="outerHTML">
+     
+    {% if project.scan_status == 'Rodando' %}
+        <div class="card border-primary bg-primary bg-opacity-10 p-3 shadow-sm">
+            <div class="d-flex align-items-center justify-content-between">
+                <div class="d-flex align-items-center text-primary">
+                    <div class="spinner-border spinner-border-sm me-2" role="status"></div>
+                    <strong>Scan em Progresso...</strong>
+                </div>
+                
+                <button hx-post="{{ url_for('main.stop_scan', id=project.id) }}" 
+                        hx-target="#scan-controls"
+                        class="btn btn-sm btn-danger fw-bold shadow-sm">
+                    <i class="fas fa-stop-circle me-1"></i> Parar Forçado
+                </button>
+            </div>
+            <div class="progress mt-2" style="height: 4px;">
+                <div class="progress-bar progress-bar-striped progress-bar-animated" style="width: 100%"></div>
+            </div>
+        </div>
+
+    {% else %}
+        <div class="d-flex flex-column gap-2">
+            <div class="btn-group shadow-sm w-100" role="group">
+                <button hx-post="{{ url_for('main.start_scan', id=project.id, mode='baseline') }}" 
+                        hx-target="#scan-controls"
+                        class="btn btn-outline-secondary" title="Salvar sem escanear">
+                    <i class="fas fa-save me-1"></i> Baseline
+                </button>
+
+                <button hx-post="{{ url_for('main.start_scan', id=project.id, mode='recon') }}" 
+                        hx-target="#scan-controls"
+                        class="btn btn-outline-primary">
+                    <i class="fas fa-satellite-dish me-1"></i> Recon
+                </button>
+                
+                <button hx-post="{{ url_for('main.start_scan', id=project.id, mode='vuln') }}" 
+                        hx-target="#scan-controls"
+                        class="btn btn-outline-danger">
+                    <i class="fas fa-bug me-1"></i> Scan Vulns
+                </button>
+            </div>
+
+            {% set pendentes = project.domains | selectattr('scanned_vulns', 'equalto', False) | selectattr('status_code', 'in', [200, 201, 202, 204, 301, 302, 307, 308]) | list | length %}
+            
+            {% if pendentes > 0 %}
+                <div class="alert alert-warning d-flex align-items-center p-2 mb-0 border-0 shadow-sm small">
+                    <i class="fas fa-exclamation-triangle me-2 text-warning"></i>
+                    <div>
+                        <strong>Atenção:</strong> {{ pendentes }} novos alvos válidos (2xx/3xx) aguardam análise.
+                    </div>
+                </div>
+            {% else %}
+                <div class="text-center text-muted small mt-1">
+                    <i class="fas fa-check-circle text-success me-1"></i> Todos os alvos válidos foram analisados.
+                </div>
+            {% endif %}
+        </div>
+    {% endif %}
+</div>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+        <div id="flash-messages" hx-swap-oob="true">
+            {% for category, message in messages %}
+                {% set b_class = 'info' %}
+                {% if category == 'error' %}{% set b_class = 'danger' %}
+                {% elif category == 'message' %}{% set b_class = 'info' %}
+                {% else %}{% set b_class = category %}{% endif %}
+                
+                {% set icon = 'fa-info-circle' %}
+                {% if b_class == 'success' %}{% set icon = 'fa-check-circle' %}
+                {% elif b_class == 'danger' %}{% set icon = 'fa-times-circle' %}
+                {% elif b_class == 'warning' %}{% set icon = 'fa-exclamation-triangle' %}
+                {% endif %}
+
+                <div class="alert alert-{{ b_class }} alert-dismissible fade show border-0 mb-2" role="alert">
+                    <div class="d-flex align-items-center">
+                        <i class="fas {{ icon }} me-2 fa-lg"></i>
+                        <div>{{ message }}</div>
+                    </div>
+                    <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                </div>
+            {% endfor %}
+        </div>
+    {% endif %}
+{% endwith %}

@@ -1,0 +1,9 @@
+flask
+flask-sqlalchemy
+flask-login
+flask-migrate
+psycopg2-binary
+celery
+redis
+python-dotenv
+requests

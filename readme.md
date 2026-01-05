@@ -8,7 +8,7 @@
 ![Postgres](https://img.shields.io/badge/PostgreSQL-Database-336791?style=for-the-badge&logo=postgresql)
 ![License](https://img.shields.io/badge/License-GPLv3-red?style=for-the-badge)
 
-O **BugBounty Monitor Pro** é uma solução completa para orquestrar ferramentas de segurança ofensiva. Ele automatiza o fluxo de descoberta de ativos (subdomínios), verificação de portas, detecção de tecnologias e escaneamento de vulnerabilidades (CVEs, XSS, SQLi), tudo gerenciado através de um dashboard interativo.
+O **BugBounty Monitor** é uma solução completa para orquestrar ferramentas de segurança ofensiva. Ele automatiza o fluxo de descoberta de ativos (subdomínios), verificação de portas, detecção de tecnologias e escaneamento de vulnerabilidades (CVEs, XSS, SQLi), tudo gerenciado através de um dashboard interativo.
 
 ---
 

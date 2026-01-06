@@ -149,6 +149,8 @@ Abra o navegador em: [http://localhost:5000](https://www.google.com/search?q=htt
 
 * **Login:** Use as credenciais definidas em `ADMIN_USER` e `ADMIN_PASSWORD`.
 
+---
+
 ## 🔎 Guia de Filtros Avançados
 
 O sistema utiliza uma sintaxe de busca inteligente que permite criar queries complexas combinando **E** (AND) e **OU** (OR).

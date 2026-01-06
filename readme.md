@@ -149,9 +149,71 @@ Abra o navegador em: [http://localhost:5000](https://www.google.com/search?q=htt
 
 * **Login:** Use as credenciais definidas em `ADMIN_USER` e `ADMIN_PASSWORD`.
 
+## 🔎 Guia de Filtros Avançados
 
+O sistema utiliza uma sintaxe de busca inteligente que permite criar queries complexas combinando **E** (AND) e **OU** (OR).
+
+### 🧠 Como funciona a Lógica?
+
+1.  **Espaço ( ) separa blocos de busca:**
+    * `tech:Nginx status:200` → Busca quem tem Nginx **E** Status 200.
+2.  **Vírgula (,) agrupa valores:**
+    * Para **Status** e **Subdomínio**: Funciona como **OU**.
+        * `status:200,403` → Retorna resultados que sejam 200 **OU** 403.
+    * Para **Tech**, **Portas** e **Path**: Funciona como **E** (Obrigatório ter todos).
+        * `tech:Angular,Node` → Retorna apenas subdomínios que tenham Angular **E** Node juntos (Stack específica).
+
+### Filtros Disponíveis
+
+| Chave | Lógica da Vírgula | Descrição | Exemplo |
+| :--- | :--- | :--- | :--- |
+| **`status:`** | **OU** | Filtra pelo código de resposta HTTP. | `status:200,403` (Encontra 200 ou 403) |
+| **`subdominio:`** | **OU** | Busca parcial no nome. | `subdominio:api,dev` (Contém "api" ou "dev") |
+| **`tech:`** | **E (AND)** | Busca tecnologias (Stack). | `tech:PHP,Laravel` (Deve ter PHP **E** Laravel) |
+| **`portas:`** | **E (AND)** | Busca portas abertas. | `portas:80,443` (Deve ter as duas abertas) |
+| **`path:`** | **E (AND)** | Filtra diretórios encontrados. | `path:/.git,/admin` (Deve ter os dois) |
+
+### 💡 Exemplos de Combinação (Power User)
+
+* **Encontrar uma Stack Específica (AND):**
+  Quero sites que usem *NodeJS* junto com *Express*.
+```text
+  tech:NodeJS,Express
+```
+
+* **Comparar Tecnologias (OR):**
+Quero ver todos os sites *Java* e também todos os sites *PHP*.
+```text
+tech:Java tech:PHP
+```
+
+* **Busca de Vulnerabilidade Crítica:**
+Quero painéis administrativos (*admin*) que retornem sucesso (*200*) e usem *WordPress*.
+```text
+subdominio:admin status:200 tech:WordPress
+```
+
+### Exemplos de Combinação
+
+* **Encontrar painéis administrativos vivos:**
+```text
+  status:200 subdominio:admin
+```
+
+* **Buscar vazamento de arquivos Git em servidores Nginx:**
+```text
+tech:nginx path:/.git
+```
+
+
+* **Buscar serviços rodando em portas alternativas:**
+```text
+status:200 portas:8443
+```
+
+> **Nota:** Se você digitar texto sem uma chave (ex: `login`), o sistema fará uma busca geral no nome do domínio e nas tecnologias.
 
 
 <div align="center">
-<sub>Desenvolvido por <a href="https://github.com/Sonael">Sonael</a></sub>
+<subdominio>Desenvolvido por <a href="https://github.com/Sonael">Sonael</a></subdominio>
 </div>

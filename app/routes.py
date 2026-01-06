@@ -5,8 +5,9 @@ from . import db, celery
 from .models import User, Project, Domain, Vulnerability
 from .tasks import run_scan_task 
 import os
-from sqlalchemy import or_
+from sqlalchemy import or_, and_
 import fnmatch
+
 
 main = Blueprint('main', __name__)
 
@@ -104,12 +105,6 @@ def dashboard():
     projects = Project.query.filter_by(user_id=current_user.id).all()
     return render_template('dashboard.html', projects=projects)
 
-
-@main.route('/project/new', methods=['POST'])
-@login_required
-def new_project():
-    # Mantido para compatibilidade, mas o ideal é usar add_project
-    return add_project()
 
 @main.route('/add_project', methods=['POST'])
 @login_required
@@ -359,15 +354,57 @@ def count_domains(id):
     return str(len(project.domains))
 
 def parse_discord_search(query_str):
-    filters = {'general': []}
+    # Estrutura de dados alterada para suportar grupos de AND dentro de OR
+    filters = {
+        'status': [], # Status é sempre OR (lista simples)
+        'portas': [], # Lista de listas (Grupos AND)
+        'tech': [],   # Lista de listas (Grupos AND)
+        'path': [],   # Lista de listas (Grupos AND)
+        'sub': [],    # OR
+        'general': []
+    }
+    
     if not query_str: return filters
+        
     parts = query_str.split(' ')
+    
     for part in parts:
+        part = part.strip()
+        if not part: continue
+        
+        # Remove vírgula final se sobrar
+        if part.endswith(','): part = part[:-1]
+
         if ':' in part:
             key, value = part.split(':', 1)
-            filters[key.lower()] = value
+            key = key.lower()
+            
+            # Normalização
+            if key in ['ports']: key = 'portas'
+            if key in ['tecnologias']: key = 'tech'
+            if key in ['paths']: key = 'path'
+            if key in ['subdominio', 'domain']: key = 'sub'
+            
+            if key in filters:
+                # LÓGICA NOVA:
+                # Para status, mesclamos tudo numa lista só (OR)
+                if key == 'status' or key == 'sub':
+                    if ',' in value:
+                        filters[key].extend([v.strip() for v in value.split(',') if v.strip()])
+                    else:
+                        filters[key].append(value.strip())
+                
+                # Para Tech, Portas e Path, criamos GRUPOS
+                # 'tech:A,B' vira ['A', 'B'] (Isso será um AND)
+                else:
+                    if ',' in value:
+                        group = [v.strip() for v in value.split(',') if v.strip()]
+                        filters[key].append(group)
+                    elif value.strip():
+                        filters[key].append([value.strip()])
         else:
-            if part.strip(): filters['general'].append(part)
+            filters['general'].append(part)
+            
     return filters
 
 @main.route('/project/<int:id>/domains_part')
@@ -379,33 +416,67 @@ def project_domains_part(id):
     
     query = Domain.query.filter_by(project_id=project.id)
     
+    # 1. Filtros Avançados
     if search_query:
         filters = parse_discord_search(search_query)
-        if 'status' in filters:
-            codes = [int(c) for c in filters['status'].split(',') if c.isdigit()]
+        
+        # STATUS (Sempre OR -> status IN (...))
+        if filters['status']:
+            codes = [int(c) for c in filters['status'] if c.isdigit()]
             if codes: query = query.filter(Domain.status_code.in_(codes))
-        if 'portas' in filters or 'ports' in filters:
-            p_val = filters.get('portas') or filters.get('ports')
-            query = query.filter(Domain.open_ports.ilike(f"%{p_val}%"))
-        if 'tech' in filters or 'tecnologias' in filters:
-            t_val = filters.get('tech') or filters.get('tecnologias')
-            query = query.filter(Domain.technologies.ilike(f"%{t_val}%"))
-        if 'path' in filters or 'paths' in filters:
-            path_val = filters.get('path') or filters.get('paths')
-            query = query.filter(Domain.discovered_paths.ilike(f"%{path_val}%"))
-        if 'subdominio' in filters or 'sub' in filters or 'domain' in filters:
-            d_val = filters.get('subdominio') or filters.get('sub') or filters.get('domain')
-            query = query.filter(Domain.name.ilike(f"%{d_val}%"))
-        if filters['general']:
-            term = filters['general'][0]
-            query = query.filter(or_(Domain.name.ilike(f"%{term}%"), Domain.technologies.ilike(f"%{term}%")))
 
+        # PORTAS (Híbrido: Vírgula = AND, Espaço = OR)
+        if filters['portas']:
+            or_conditions = []
+            for group in filters['portas']:
+                # Dentro do grupo (vírgula), TEM que ter todas as portas (AND)
+                and_conditions = [Domain.open_ports.ilike(f"%{p}%") for p in group]
+                or_conditions.append(and_(*and_conditions))
+            query = query.filter(or_(*or_conditions))
+
+        # TECH (Híbrido: Vírgula = AND, Espaço = OR)
+        if filters['tech']:
+            or_conditions = []
+            for group in filters['tech']:
+                # Ex: tech:Angular,Node -> Busca %Angular% AND %Node%
+                and_conditions = [Domain.technologies.ilike(f"%{t}%") for t in group]
+                or_conditions.append(and_(*and_conditions))
+            
+            # Ex: tech:A tech:B -> Busca (Grupo A) OR (Grupo B)
+            query = query.filter(or_(*or_conditions))
+
+        # PATH (Híbrido)
+        if filters['path']:
+            or_conditions = []
+            for group in filters['path']:
+                and_conditions = [Domain.discovered_paths.ilike(f"%{p}%") for p in group]
+                or_conditions.append(and_(*and_conditions))
+            query = query.filter(or_(*or_conditions))
+
+        # SUBDOMINIO (OR)
+        if filters['sub']:
+            conds = [Domain.name.ilike(f"%{s}%") for s in filters['sub']]
+            query = query.filter(or_(*conds))
+
+        # GERAL
+        for term in filters['general']:
+            query = query.filter(or_(
+                Domain.name.ilike(f"%{term}%"), 
+                Domain.technologies.ilike(f"%{term}%")
+            ))
+
+    # 2. Filtros Rápidos
     if status_filter:
-        if status_filter == 'ok': query = query.filter(Domain.status_code >= 200, Domain.status_code < 300)
-        elif status_filter == 'redirect': query = query.filter(Domain.status_code >= 300, Domain.status_code < 400)
-        elif status_filter == 'error': query = query.filter(Domain.status_code >= 400)
-        elif status_filter == 'dead': query = query.filter((Domain.status_code == 0) | (Domain.status_code == None))
-        elif status_filter.isdigit(): query = query.filter_by(status_code=int(status_filter))
+        if status_filter == 'ok': 
+            query = query.filter(Domain.status_code >= 200, Domain.status_code < 300)
+        elif status_filter == 'redirect': 
+            query = query.filter(Domain.status_code >= 300, Domain.status_code < 400)
+        elif status_filter == 'error': 
+            query = query.filter(Domain.status_code >= 400)
+        elif status_filter == 'dead': 
+            query = query.filter((Domain.status_code == 0) | (Domain.status_code == None))
+        elif status_filter.isdigit(): 
+            query = query.filter_by(status_code=int(status_filter))
 
     domains = query.order_by(Domain.first_seen.desc()).all()
     

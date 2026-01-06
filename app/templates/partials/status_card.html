@@ -1,6 +1,8 @@
+{% set refresh_rate = 'every 3s' if project.scan_status in ['Rodando', 'Na fila'] else 'every 3s' %}
+
 <div class="card border-0 shadow-sm mb-4" id="status-card"
      hx-get="{{ url_for('main.project_status_part', id=project.id) }}"
-     hx-trigger="every 2s"
+     hx-trigger="{{ refresh_rate }}"
      hx-swap="outerHTML">
 
     <div class="card-body text-center p-4">
@@ -12,6 +14,15 @@
                 <h4 class="text-primary fw-bold">{{ project.scan_message }}</h4>
                 <p class="text-muted small animate-pulse">
                     <i class="fas fa-sync fa-spin me-1"></i> Atualizando logs em tempo real...
+                </p>
+            </div>
+
+        {% elif project.scan_status == 'Na fila' %}
+            <div class="my-3">
+                <div class="spinner-border text-secondary mb-3" style="width: 3rem; height: 3rem;" role="status"></div>
+                <h4 class="text-secondary fw-bold">Na Fila de Processamento</h4>
+                <p class="text-muted small animate-pulse">
+                    <i class="fas fa-hourglass-half me-1"></i> Aguardando worker disponível...
                 </p>
             </div>
         

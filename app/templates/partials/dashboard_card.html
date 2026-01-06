@@ -9,10 +9,13 @@
     {% set ns.total_vulns = ns.total_vulns + d.vulnerabilities|length %}
 {% endfor %}
 
+{# LÓGICA DE POLLING INTELIGENTE #}
+{% set refresh_rate = 'every 3s' if project.scan_status in ['Rodando', 'Na fila'] else 'every 60s' %}
+
 <div class="col-md-4 mb-4" 
      id="project-card-{{ project.id }}"
      hx-get="{{ url_for('main.project_card_part', id=project.id) }}?t={{ range(1, 10000) | random }}"
-     hx-trigger="every 3s" 
+     hx-trigger="{{ refresh_rate }}" 
      hx-swap="outerHTML">
      
     <div class="card h-100 project-card border-0 shadow-sm position-relative">
@@ -23,6 +26,12 @@
                     <span class="badge bg-primary bg-opacity-10 text-primary border border-primary rounded-pill animate-pulse">
                         <i class="fas fa-sync fa-spin me-1"></i> Rodando
                     </span>
+
+                {% elif project.scan_status == 'Na fila' %}
+                    <span class="badge bg-secondary bg-opacity-10 text-secondary border border-secondary rounded-pill animate-pulse">
+                        <i class="fas fa-hourglass-half me-1"></i> Na fila
+                    </span>
+
                 {% elif project.scan_status == 'Erro' %}
                     <span class="badge bg-danger bg-opacity-10 text-danger border border-danger rounded-pill">
                          <i class="fas fa-exclamation-circle me-1"></i> Erro
@@ -37,17 +46,25 @@
                     </span>
                 {% endif %}
 
-                <button class="btn btn-link text-muted p-0 hover-danger" 
-                        data-bs-toggle="modal" 
-                        data-bs-target="#deleteModal{{ project.id }}" 
-                        title="Excluir Projeto">
-                    <i class="fas fa-trash-alt"></i>
-                </button>
+                <div class="d-flex gap-2">
+                    <button class="btn btn-link text-muted p-0 hover-primary" 
+                            data-bs-toggle="modal" 
+                            data-bs-target="#editModal{{ project.id }}" 
+                            title="Editar Projeto">
+                        <i class="fas fa-edit"></i>
+                    </button>
+                    <button class="btn btn-link text-muted p-0 hover-danger" 
+                            data-bs-toggle="modal" 
+                            data-bs-target="#deleteModal{{ project.id }}" 
+                            title="Excluir Projeto">
+                        <i class="fas fa-trash-alt"></i>
+                    </button>
+                </div>
             </div>
 
             <h5 class="card-title fw-bold text-dark mb-1">{{ project.name }}</h5>
             
-            {% if project.scan_status == 'Rodando' %}
+            {% if project.scan_status == 'Rodando' or project.scan_status == 'Na fila' %}
                 <div class="text-primary small mb-4 fw-bold text-truncate">
                      {{ project.scan_message }}
                 </div>
@@ -68,41 +85,33 @@
             {% endif %}
             
             <div class="d-flex justify-content-between align-items-center pt-3 border-top mt-auto">
-                
                 <div class="d-flex align-items-center flex-wrap gap-2">
-                    
                     <div class="small text-muted fw-bold" title="Total de subdomínios descobertos">
                         <i class="fas fa-sitemap me-1"></i>{{ project.domains|length }}
                     </div>
-
                     {% if count_2xx > 0 or count_3xx > 0 or count_4xx > 0 or count_5xx > 0 or ns.total_vulns > 0 %}
                         <div class="text-muted opacity-25">|</div>
                     {% endif %}
-
                     {% if ns.total_vulns > 0 %}
                     <span class="badge bg-danger rounded-pill" title="Total de Vulnerabilidades">
                         <i class="fas fa-bug"></i> {{ ns.total_vulns }}
                     </span>
                     {% endif %}
-
                     {% if count_2xx > 0 %}
                     <span class="badge bg-success bg-opacity-10 text-success border border-success rounded-pill" title="Status 2xx (Sucesso)">
                         2xx: {{ count_2xx }}
                     </span>
                     {% endif %}
-
                     {% if count_3xx > 0 %}
                     <span class="badge bg-info bg-opacity-10 text-info border border-info rounded-pill" title="Status 3xx (Redirects)">
                         3xx: {{ count_3xx }}
                     </span>
                     {% endif %}
-
                     {% if count_4xx > 0 %}
                     <span class="badge bg-warning bg-opacity-10 text-warning border border-warning rounded-pill" title="Status 4xx (Client Error)">
                         4xx: {{ count_4xx }}
                     </span>
                     {% endif %}
-
                     {% if count_5xx > 0 %}
                     <span class="badge bg-dark text-white rounded-pill" title="Status 5xx (Server Error)">
                         5xx: {{ count_5xx }}

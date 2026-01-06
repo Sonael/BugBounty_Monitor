@@ -37,43 +37,58 @@ def run_command(command, timeout=None):
 def find_subdomains(target_domain):
     """
     Fluxo Unificado: Subfinder + Amass -> Deduplicação.
-    Retorna uma lista limpa de subdomínios únicos.
+    Retorna uma lista limpa de subdomínios únicos (sem IPs, CIDRs ou ASNs).
     """
     print(f"[SCANNER] Iniciando Recon Híbrido (Subfinder + Amass) para {target_domain}...")
     
-    # Arquivos temporários para capturar outputs
     unique_id = uuid.uuid4().hex
     file_subfinder = f"raw_subfinder_{unique_id}.txt"
     file_amass = f"raw_amass_{unique_id}.txt"
     
-    subs_set = set() # Set para garantir unicidade (deduplicação automática)
+    subs_set = set() # Set para garantir unicidade
 
     try:
         # 1. Rodar Subfinder
         print(f"[SCANNER] 1/2 Rodando Subfinder...")
         cmd_sub = f"subfinder -d {target_domain} -silent -t 100 -all -o {file_subfinder}"
-        run_command(cmd_sub, timeout=600)
+        run_command(cmd_sub, timeout=1800)
         
-        # 2. Rodar Amass (Modo Passivo para velocidade)
+        # 2. Rodar Amass (Modo Passivo)
         print(f"[SCANNER] 2/2 Rodando Amass (Passive)...")
-        # limitado a 10 minutos (600s) no modo passivo
-        cmd_amass = f"amass enum -passive -d {target_domain} -o {file_amass}" 
-        run_command(cmd_amass, timeout=600)
+        cmd_amass = f"amass enum -passive -d {target_domain} -noalts -timeout 29 -o {file_amass}" 
+        run_command(cmd_amass, timeout=1800)
 
-        # 3. Processar e Deduplicar Subfinder
-        if os.path.exists(file_subfinder):
-            with open(file_subfinder, 'r') as f:
-                for line in f:
-                    sub = line.strip()
-                    if sub: subs_set.add(sub)
-        
-        # 4. Processar e Deduplicar Amass
-        if os.path.exists(file_amass):
-            with open(file_amass, 'r') as f:
-                for line in f:
-                    # Amass às vezes retorna infos extras na linha, pegamos só a primeira parte (o domínio)
-                    sub = line.strip().split(' ')[0]
-                    if sub: subs_set.add(sub)
+        # 3. Processar e Deduplicar (Lógica Unificada)
+        for filename in [file_subfinder, file_amass]:
+            if os.path.exists(filename):
+                with open(filename, 'r') as f:
+                    for line in f:
+                        # Limpa espaços e pega apenas a primeira coluna (remove infos extras do Amass)
+                        clean_line = line.strip().split(' ')[0]
+                        
+                        # --- FILTROS DE LIMPEZA (CRÍTICO) ---
+                        if not clean_line: continue
+                        
+                        # 1. Ignora Faixas CIDR (ex: 34.240.0.0/12)
+                        # Isso evita que o Naabu escaneie milhões de IPs
+                        if '/' in clean_line: continue
+                        
+                        # 2. Ignora Wildcards (ex: *.site.com)
+                        if '*' in clean_line: continue
+                        
+                        # 3. Ignora ASNs (números puros, ex: 16509)
+                        if clean_line.isdigit(): continue
+                        
+                        # 4. Regra de Ouro: Tem que ter pelo menos um ponto para ser domínio
+                        if '.' not in clean_line: continue
+
+                        # (Opcional) Ignora endereços IPv6 brutos se não quiser escanear ipv6
+                        if ':' in clean_line: continue 
+                        
+                        # 5. Tem que terminar com o domínio alvo (evita subdomínios falsos)
+                        if not clean_line.endswith(target_domain): continue
+
+                        subs_set.add(clean_line)
 
     except Exception as e:
         print(f"[SCANNER ERROR] Erro durante o Recon: {e}")
@@ -84,7 +99,7 @@ def find_subdomains(target_domain):
         if os.path.exists(file_amass): os.remove(file_amass)
     
     unique_list = list(subs_set)
-    print(f"[SCANNER] Recon finalizado. {len(unique_list)} subdomínios únicos encontrados (Combinado).")
+    print(f"[SCANNER] Recon finalizado. {len(unique_list)} subdomínios válidos encontrados.")
     return unique_list
 
 def check_alive(subdomains_list):
@@ -100,7 +115,7 @@ def check_alive(subdomains_list):
         print(f"[SCANNER] Rodando HTTPX em {len(subdomains_list)} alvos...")
         
         cmd = f"/usr/local/bin/pd-httpx -l {filename} -json -silent -sc -td -probe -ip -threads 50"
-        results = run_command(cmd, timeout=600)
+        results = run_command(cmd, timeout=1800)
         
         print(f"[SCANNER] HTTPX finalizado. {len(results)} respostas capturadas.")
         
@@ -190,7 +205,7 @@ def scan_crawling_xss_bulk(targets_file):
         print(f"[SCANNER BULK] 2/3 Rodando GAU para enriquecer com URLs arquivadas...")
         # Usa 'cat' para ler o arquivo de alvos e passar pro GAU
         cmd_gau = f"cat {targets_file} | gau --blacklist png,jpg,jpeg,gif,css,svg,woff,woff2 >> {temp_urls_file}"
-        run_command(cmd_gau, timeout=1200)
+        run_command(cmd_gau, timeout=1800)
 
         if not os.path.exists(temp_urls_file) or os.path.getsize(temp_urls_file) == 0:
             print("[SCANNER BULK] Katana e GAU não encontraram nenhuma URL.")
@@ -333,7 +348,7 @@ def scan_naabu_bulk(targets_file):
     print(f"[SCANNER] Iniciando Naabu (Port Scan) no arquivo: {targets_file}")
     
     cmd = f"naabu -list {targets_file} -top-ports 100 -json -silent"
-    results = run_command(cmd, timeout=1200)
+    results = run_command(cmd, timeout=1800)
     
     port_map = {}
     
@@ -419,7 +434,7 @@ def scan_gau(target_domain):
     
     # --blacklist ignora imagens e fontes para não poluir
     cmd = f"gau {target_domain} --blacklist png,jpg,jpeg,gif,css,svg,woff,woff2 --o {output_file}"
-    run_command(cmd, timeout=600)
+    run_command(cmd, timeout=1800)
     
     urls = []
     if os.path.exists(output_file):
@@ -441,7 +456,7 @@ def scan_cmseek(target_url):
     # 1. Rodar o comando
     # --batch: Executa sem perguntar nada
     cmd = f"python3 /opt/CMSeeK/cmseek.py -u {target_url} --batch --random-agent"
-    run_command(cmd, timeout=300)
+    run_command(cmd, timeout=1800)
     
     # 2. Descobrir o caminho do arquivo JSON gerado
     # Extrair apenas o hostname da URL (ex: https://site.com -> site.com)
@@ -491,10 +506,10 @@ def scan_ffuf(target_url):
     print(f"[SCANNER] Rodando FFuf (Fuzzing) em {target_url}...")
     output_file = f"ffuf_{uuid.uuid4().hex}.json"
     
-    # Timeout 20 min
-    cmd = f"ffuf -u {target_url}/FUZZ -w /opt/wordlists/common.txt -mc 200,204,301,302,307,403 -o {output_file} -of json -s"
+
+    cmd = f"ffuf -u {target_url}/FUZZ -w /opt/wordlists/common.txt -mc 200,204,301,302,307,403 -o {output_file} -of json -s -t 50 -ac"
     
-    run_command(cmd, timeout=1200) 
+    run_command(cmd, timeout=1800) 
     
     found_paths = []
     if os.path.exists(output_file):

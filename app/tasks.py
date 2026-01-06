@@ -9,6 +9,7 @@ from .scanner import (
 from datetime import datetime
 import os
 import traceback
+import fnmatch
 
 @celery.task(bind=True)
 def run_scan_task(self, project_id, mode='full'):
@@ -28,152 +29,239 @@ def run_scan_task(self, project_id, mode='full'):
             project.last_scan_date = datetime.utcnow()
             db.session.commit()
 
+            # Prepara a Blacklist (Out of Scope)
+            blacklist = [line.strip() for line in (project.out_of_scope or "").splitlines() if line.strip()]
+
             # ==============================================================================
-            # FASE 1: RECON (Coleta + Portas + DNS + Status + FUZZING EM NOVOS)
+            # FASE 1: RECON (Coleta + Portas + DNS + Status + FUZZING)
             # ==============================================================================
             if mode in ['recon', 'full', 'baseline']:
                 print("[WORKER] --- Iniciando Fase RECON ---")
-                project.scan_message = "1/4 Coletando Subdomínios (Subfinder | Amass)"
-                db.session.commit()
+                
+                # --- 1. COLETA DE SUBDOMÍNIOS ---
+                found_subs = []
+                
+                if project.discovery_enabled:
+                    # Passo A: Definir Sementes (APENAS Raízes)
+                    # 1. Alvo Principal
+                    target_clean = project.target_url.replace('https://', '').replace('http://', '').split('/')[0]
+                    seeds = {target_clean}
+                    
+                    # 2. Adiciona APENAS o que está escrito no campo "In Scope" (Manual)
+                    # Isso evita o loop de re-escanear subdomínios já descobertos
+                    if project.in_scope:
+                        for line in project.in_scope.splitlines():
+                            line = line.strip()
+                            if line:
+                                # Limpa protocolo se houver
+                                clean_manual = line.replace('https://', '').replace('http://', '').split('/')[0]
+                                seeds.add(clean_manual)
+                    
+                    total_seeds = len(seeds)
+                    print(f"[WORKER] Discovery ATIVADO. {total_seeds} sementes raízes: {seeds}")
+                    
+                    all_discovered = set()
+                    
+                    # Passo B: Rodar Subfinder/Amass nas sementes raízes
+                    for idx, seed in enumerate(seeds, 1):
+                        msg = f"1/4 Coletando ({idx}/{total_seeds}): {seed}"
+                        print(f"[WORKER] {msg}")
+                        project.scan_message = msg
+                        db.session.commit()
+                        
+                        seed_results = find_subdomains(seed)
+                        all_discovered.update(seed_results)
+                    
+                    # Passo C: Merge Inteligente
+                    # Adicionamos os domínios que já existem no banco à lista de resultados
+                    # Motivo: Para que eles passem pelas fases seguintes (HTTPX/Naabu) mesmo que o Subfinder não os ache hoje.
+                    current_domains_db = Domain.query.filter_by(project_id=project.id).all()
+                    for d in current_domains_db:
+                        all_discovered.add(d.name)
+                    
+                    found_subs = list(all_discovered)
 
-                found_subs = find_subdomains(project.target_url)
-                print(f"[WORKER] Recon encontrou {len(found_subs)} domínios.")
-                
-                # --- NAABU ---
-                project.scan_message = "2/4 Verificando Portas Abertas (Naabu)..."
-                db.session.commit()
-                
-                temp_subs_file = f"subs_naabu_{project.id}.txt"
-                with open(temp_subs_file, 'w') as f:
-                    f.write("\n".join(found_subs))
-                
-                naabu_data = scan_naabu_bulk(temp_subs_file)
-                if os.path.exists(temp_subs_file): os.remove(temp_subs_file)
+                else:
+                    # Modo Manual (Sem Discovery)
+                    print("[WORKER] Discovery DESATIVADO. Usando apenas banco de dados.")
+                    project.scan_message = "1/4 Carregando lista de alvos..."
+                    db.session.commit()
+                    current_domains = Domain.query.filter_by(project_id=project.id).all()
+                    found_subs = [d.name for d in current_domains]
 
-                # --- HTTPX ---
-                project.scan_message = f"3/4 Verificando {len(found_subs)} subdomínios (HTTPX)..."
-                db.session.commit()
+                # --- 2. FILTRAGEM (OUT OF SCOPE) ---
+                final_subs = []
+                for sub in found_subs:
+                    is_blocked = False
+                    for bl in blacklist:
+                        # Regra Wildcard (*)
+                        if fnmatch.fnmatch(sub, bl):
+                            is_blocked = True
+                            break
+                        # Regra Sufixo
+                        if '*' not in bl:
+                            if sub == bl or sub.endswith("." + bl):
+                                is_blocked = True
+                                break
+                    if not is_blocked:
+                        final_subs.append(sub)
+
+                found_subs = final_subs 
+                print(f"[WORKER] Lista final para análise: {len(found_subs)} domínios.")
                 
-                alive_data = check_alive(found_subs)
-                print(f"[WORKER] HTTPX retornou dados de {len(alive_data)} domínios vivos.")
+                # --- 3. NAABU (PORT SCAN) ---
+                if found_subs:
+                    project.scan_message = "2/4 Verificando Portas Abertas (Naabu)..."
+                    db.session.commit()
+                    
+                    temp_subs_file = f"subs_naabu_{project.id}.txt"
+                    with open(temp_subs_file, 'w') as f:
+                        f.write("\n".join(found_subs))
+                    
+                    naabu_data = scan_naabu_bulk(temp_subs_file)
+                    if os.path.exists(temp_subs_file): os.remove(temp_subs_file)
+                else:
+                    naabu_data = {}
+
+                # --- 4. HTTPX (LIVE CHECK) ---
+                if found_subs:
+                    project.scan_message = f"3/4 Verificando {len(found_subs)} subdomínios (HTTPX)..."
+                    db.session.commit()
+                    alive_data = check_alive(found_subs)
+                else:
+                    alive_data = []
                 
+                # Mapeamento de dados para acesso rápido
                 status_map = {}
                 tech_map = {}
                 ip_map = {} 
-                url_map = {} # Mapeia dominio -> url completa (https://...)
+                url_map = {}
                 
                 for item in alive_data:
                     clean = item['url'].replace('https://', '').replace('http://', '').split('/')[0].split(':')[0]
                     status_map[clean] = item['status']
                     tech_map[clean] = item.get('tech', [])
                     ip_map[clean] = item.get('ip')
-                    url_map[clean] = item['url'] # Salva a URL correta para o Fuzzing
+                    url_map[clean] = item['url'] 
 
-                existing_domains = {d.name for d in project.domains}
+                domain_map = {d.name: d for d in Domain.query.filter_by(project_id=project.id).all()}
+                
                 new_count = 0
-                total_paths_found = 0 # Contador para o Discord
+                total_paths_found = 0 
 
-                project.scan_message = "4/4 Processando Novos Alvos (DNS + Fuzzing)..."
+                project.scan_message = "4/4 Processando Alvos (DNS + Fuzzing)..."
                 db.session.commit()
 
+                # --- 5. ATUALIZAÇÃO E FUZZING ---
                 for sub in found_subs:
-                    if sub not in existing_domains:
-                        is_scanned = True if mode == 'baseline' else False
+                    domain_obj = domain_map.get(sub)
+                    is_new_entry = False
+
+                    if not domain_obj:
+                        domain_obj = Domain(name=sub, project_id=project.id)
+                        is_new_entry = True
+                    
+                    if mode == 'baseline':
+                        domain_obj.scanned_vulns = True
+
+                    val = status_map.get(sub)
+                    code = int(val) if val is not None else 0
+                    domain_obj.status_code = code
+
+                    tech_list = tech_map.get(sub, [])
+                    if tech_list:
+                        domain_obj.technologies = ", ".join(tech_list)
+                    
+                    domain_obj.ip_address = ip_map.get(sub)
+                    domain_obj.open_ports = naabu_data.get(sub)
+                    
+                    # Resolve DNS se ativo ou com porta aberta
+                    if code > 0 or domain_obj.open_ports:
+                        domain_obj.dns_info = run_dig_info(sub)
+                    
+                    # --- LÓGICA DE FUZZING OTIMIZADA ---
+                    should_fuzz = False
+                    
+                    # Regra 1: Baseline (Criação) -> Só se o botão Fuzzing estiver ligado
+                    if mode == 'baseline':
+                        if project.fuzzing_enabled:
+                            should_fuzz = True
+                    
+                    # Regra 2: Recon/Full (Manutenção) -> Só em NOVOS ou se Discovery desligado
+                    else:
+                        if is_new_entry:
+                            should_fuzz = True
+                        elif not project.discovery_enabled:
+                            should_fuzz = True
+
+                    allowed_codes = [200, 201, 202, 204, 301, 302, 307, 308, 403]
+                    
+                    if should_fuzz and code in allowed_codes:
+                        target_url = url_map.get(sub, f"https://{sub}")
+                        print(f"[WORKER] Rodando Fuzzing em: {sub}")
                         
-                        val = status_map.get(sub)
-                        code = int(val) if val is not None else 0
+                        # CMSeeK
+                        cms_found = scan_cmseek(target_url)
+                        if cms_found:
+                            if domain_obj.technologies:
+                                domain_obj.technologies += f", {cms_found}"
+                            else:
+                                domain_obj.technologies = cms_found
                         
-                        tech_list = tech_map.get(sub, [])
-                        tech_str = ", ".join(tech_list) if tech_list else None
-                        
-                        ip_addr = ip_map.get(sub)
-                        ports_str = naabu_data.get(sub)
-                        
-                        dns_str = None
-                        if code > 0 or ports_str:
-                            dns_str = run_dig_info(sub)
-                        
-                        # --- LÓGICA DE FUZZING ---
-                        fuzz_paths_str = None
-                        
-                        allowed_codes = [200, 201, 202, 204, 301, 302, 307, 308]
-                        
-                        # Só roda fuzzing se estiver nesse range [200, 201, 202, 204, 301, 302, 307, 308] e não for apenas baseline
-                        if code in allowed_codes and mode != 'baseline':
-                            target_url = url_map.get(sub, f"https://{sub}")
-                            print(f"[WORKER] Novo alvo detectado: {sub}. Iniciando Fuzzing rápido...")
+                        # FFuf
+                        f_res = scan_ffuf(target_url)
+                        if f_res:
+                            paths_list = [item['raw_path'] for item in f_res]
+                            # Lógica de merge de paths
+                            if len(paths_list) > 15:
+                                subset = paths_list[:15]
+                                subset.append(f"[+{len(paths_list)-15} outros]")
+                                final_str = ", ".join(subset)
+                            else:
+                                final_str = ", ".join(paths_list)
                             
-                            # Roda o CMSeeK para enriquecer tecnologia
-                            cms_found = scan_cmseek(target_url)
+                            if domain_obj.discovered_paths:
+                                # Merge simples para não duplicar visualmente
+                                existing_paths = domain_obj.discovered_paths.split(", ")
+                                combined = list(set(existing_paths + final_str.split(", ")))
+                                domain_obj.discovered_paths = ", ".join(combined[:15])
+                            else:
+                                domain_obj.discovered_paths = final_str
                             
-                            # Se achou algo, adiciona à string de tecnologias existente
-                            if cms_found:
-                                if tech_str:
-                                    tech_str += f", {cms_found}"
-                                else:
-                                    tech_str = cms_found
-                            
-                            # Roda o FFuf
-                            f_res = scan_ffuf(target_url)
-                            if f_res:
-                                paths_list = [item['raw_path'] for item in f_res]
-                                fuzz_paths_str = ", ".join(paths_list)
-                                total_paths_found += len(paths_list)
-                        
-                        new_dom = Domain(
-                            name=sub, project_id=project.id, 
-                            scanned_vulns=is_scanned, status_code=code,
-                            technologies=tech_str,
-                            ip_address=ip_addr,
-                            open_ports=ports_str,
-                            dns_info=dns_str,
-                            discovered_paths=fuzz_paths_str
-                        )
-                        db.session.add(new_dom)
+                            total_paths_found += len(paths_list)
+                    
+                    if is_new_entry:
+                        db.session.add(domain_obj)
                         new_count += 1
                 
                 db.session.commit()
-                print(f"[WORKER] {new_count} novos domínios salvos no banco.")
-
-                # --- CÁLCULO DE ESTATÍSTICAS PARA O DISCORD ---
-                c_2xx = 0
-                c_3xx = 0
-                c_4xx = 0
-                c_5xx = 0
                 
-                for item in alive_data:
-                    try:
-                        code = int(item.get('status', 0))
-                        if 200 <= code < 300: c_2xx += 1
-                        elif 300 <= code < 400: c_3xx += 1
-                        elif 400 <= code < 500: c_4xx += 1
-                        elif 500 <= code < 600: c_5xx += 1
-                    except: pass
+                # --- MÉTRICAS HTTP ---
+                c_2xx = sum(1 for i in alive_data if 200 <= int(i.get('status') or 0) < 300)
+                c_3xx = sum(1 for i in alive_data if 300 <= int(i.get('status') or 0) < 400)
+                c_4xx = sum(1 for i in alive_data if 400 <= int(i.get('status') or 0) < 500)
+                c_5xx = sum(1 for i in alive_data if 500 <= int(i.get('status') or 0) < 600)
 
-                # --- NOTIFICAÇÃO DISCORD ---
+                # --- NOTIFICAÇÃO ---
                 try:
                     recon_fields = [
-                        {"name": "🌐 Total", "value": str(len(found_subs)), "inline": True},
-                        {"name": "🆕 Novos", "value": str(new_count), "inline": True},
-                        {"name": "⚡ Vivos", "value": str(len(alive_data)), "inline": True},
+                        {"name": "🌐 Total Analisado", "value": str(len(found_subs)), "inline": True},
+                        {"name": "🆕 Novos DB", "value": str(new_count), "inline": True},
+                        {"name": "⚡ Vivos (HTTPX)", "value": str(len(alive_data)), "inline": True},
                         {"name": "📂 Paths (Fuzzing)", "value": str(total_paths_found), "inline": True}, 
                         
-                        
                         {"name": "--- Detalhamento HTTP ---", "value": "\u200b", "inline": False},
-                        
                         
                         {"name": "✅ 200 OK", "value": str(c_2xx), "inline": True},
                         {"name": "➡️ REDIRECT", "value": str(c_3xx), "inline": True},
                         {"name": "🚫 CLIENT ERR", "value": str(c_4xx), "inline": True},
                         {"name": "🔥 SERVER ERR", "value": str(c_5xx), "inline": True}
                     ]
+                    color = 0x00ff00 if new_count > 0 else 0x3498db
                     
-                    color = 0x3498db 
-                    if new_count > 0: color = 0x00ff00 
-
                     send_discord_embed(
                         title=f"📡 Recon: {project.name}",
-                        description=f"Reconhecimento concluído.",
+                        description=f"Reconhecimento concluído. (Discovery: {'ON' if project.discovery_enabled else 'OFF'})",
                         fields=recon_fields,
                         color_hex=color
                     )
@@ -186,13 +274,13 @@ def run_scan_task(self, project_id, mode='full'):
                     db.session.commit()
                     print("[WORKER] Fase RECON finalizada com sucesso.")
                     return "Recon OK"
-
             # ==============================================================================
             # FASE 2: VULN SCAN (BATCH PROCESSING)
             # ==============================================================================
             if mode in ['vuln', 'full']:
                 print("[WORKER] --- Iniciando Fase VULN SCAN (Batch) ---")
                 
+                # Pega domínios que AINDA NÃO FORAM ESCANEADOS (scanned_vulns=False) e que estão vivos
                 targets = Domain.query.filter(
                     Domain.project_id == project.id,
                     Domain.scanned_vulns == False,
@@ -200,13 +288,13 @@ def run_scan_task(self, project_id, mode='full'):
                 ).all()
                 
                 if not targets:
-                    print("[WORKER] Nenhum alvo pendente com Status 200.")
+                    print("[WORKER] Nenhum alvo pendente com Status OK para Vuln Scan.")
                     project.scan_status = "Concluído"
                     project.scan_message = "Nenhum alvo válido pendente."
                     db.session.commit()
                     return "Scan Finalizado (Sem novos alvos)"
 
-                print(f"[WORKER] Alvos qualificados: {len(targets)}")
+                print(f"[WORKER] Alvos qualificados para Vuln Scan: {len(targets)}")
 
                 target_file = f"targets_proj_{project.id}.txt"
                 with open(target_file, "w") as f:
@@ -229,8 +317,6 @@ def run_scan_task(self, project_id, mode='full'):
                     # 3. SQLMap
                     sqli_vulns = scan_sqlmap_bulk(target_file)
                     process_vulns(sqli_vulns, project.id)
-                    # sqli_vulns = []
-                    
 
                     # 4. Atualizar Status Final
                     print("[WORKER] Marcando domínios como escaneados...")
@@ -262,7 +348,7 @@ def run_scan_task(self, project_id, mode='full'):
                                 color_hex=0x00ff00
                             )
                     except Exception as e:
-                         print(f"[NOTIFY ERROR] Erro ao enviar Embed: {e}")
+                        print(f"[NOTIFY ERROR] Erro ao enviar Embed: {e}")
 
                     project.scan_status = "Concluído"
                     project.scan_message = f"Finalizado. {total_vulns} vulns."

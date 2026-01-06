@@ -33,21 +33,96 @@
     {% for project in projects %}
         {% include 'partials/dashboard_card.html' %}
 
-        <div class="modal fade" id="deleteModal{{ project.id }}" tabindex="-1">
-            <div class="modal-dialog modal-sm modal-dialog-centered">
-                <div class="modal-content border-0 shadow-lg">
-                    <div class="modal-header bg-danger text-white border-0 py-2">
-                        <h6 class="modal-title fw-bold"><i class="fas fa-trash-alt me-2"></i>Excluir Alvo</h6>
+        <div class="modal fade" id="editModal{{ project.id }}" tabindex="-1" onclick="event.stopPropagation()">
+            <div class="modal-dialog modal-lg">
+                <form method="POST" action="{{ url_for('main.edit_project', id=project.id) }}">
+                    <div class="modal-content border-0 shadow-lg text-start">
+                        <div class="modal-header bg-primary text-white">
+                            <h5 class="modal-title fw-bold"><i class="fas fa-edit me-2"></i>Editar Projeto</h5>
+                            <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                        </div>
+                        
+                        <div class="modal-body p-4">
+                            <div class="row">
+                                <div class="col-md-6 mb-3">
+                                    <label class="form-label fw-bold">Nome do Projeto</label>
+                                    <input type="text" name="name" class="form-control" value="{{ project.name }}" required>
+                                </div>
+                                <div class="col-md-6 mb-3">
+                                    <label class="form-label fw-bold">Domínio Principal (Escopo)</label>
+                                    <div class="input-group">
+                                        <span class="input-group-text bg-light"><i class="fas fa-globe"></i></span>
+                                        <input type="text" name="target_url" class="form-control" value="{{ project.target_url }}" required>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <hr class="my-4 text-muted">
+
+                            <div class="mb-3 p-3 bg-light rounded border">
+                                <div class="form-check form-switch">
+                                    <input class="form-check-input" type="checkbox" name="auto_discovery" 
+                                           {% if project.discovery_enabled %}checked{% endif %}>
+                                    <label class="form-check-label fw-bold">Habilitar Descoberta Automática</label>
+                                </div>
+                            </div>
+
+                            <div class="mb-4 p-3 bg-light rounded border">
+                                <div class="form-check form-switch">
+                                    <input class="form-check-input" type="checkbox" name="enable_fuzzing" 
+                                           {% if project.fuzzing_enabled %}checked{% endif %}>
+                                    <label class="form-check-label fw-bold">Habilitar Fuzzing (FFuf)</label>
+                                </div>
+                            </div>
+
+                            <div class="row">
+                                <div class="col-md-6 mb-3">
+                                    <label class="form-label fw-bold text-success">
+                                        <i class="fas fa-plus-circle me-1"></i> Adicionar ao Escopo (Manual)
+                                    </label>
+                                    <textarea name="in_scope" class="form-control font-monospace small" rows="5" 
+                                        placeholder="Digite novos domínios aqui...">{{ project.in_scope or '' }}</textarea>
+                                    <div class="form-text">Domínios digitados aqui serão escaneados.</div>
+                                </div>
+
+                                <div class="col-md-6 mb-3">
+                                    <label class="form-label fw-bold text-danger">
+                                        <i class="fas fa-ban me-1"></i> Out of Scope (Ignorar)
+                                    </label>
+                                    <textarea name="out_of_scope" class="form-control font-monospace small" rows="5">{{ project.out_of_scope or '' }}</textarea>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="modal-footer bg-light">
+                            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+                            <button type="submit" class="btn btn-primary fw-bold px-4">Salvar Alterações</button>
+                        </div>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <div class="modal fade" id="deleteModal{{ project.id }}" tabindex="-1" onclick="event.stopPropagation()">
+            <div class="modal-dialog">
+                <div class="modal-content border-0 shadow-lg text-start">
+                    <div class="modal-header bg-danger text-white">
+                        <h5 class="modal-title fw-bold"><i class="fas fa-exclamation-triangle me-2"></i>Zona de Perigo</h5>
                         <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
                     </div>
-                    <div class="modal-body text-center p-4">
-                        <p class="mb-0">Tem certeza que deseja apagar o projeto<br><strong>{{ project.name }}</strong>?</p>
-                        <small class="text-danger">Isso não pode ser desfeito.</small>
+                    <div class="modal-body p-4">
+                        <p class="mb-3">Você está prestes a excluir o projeto <strong>{{ project.name }}</strong> permanentemente.</p>
+                        <div class="alert alert-danger bg-danger bg-opacity-10 border-danger text-danger">
+                            <ul class="mb-0 small">
+                                <li>Todos os subdomínios serão perdidos.</li>
+                                <li>O histórico de vulnerabilidades será apagado.</li>
+                            </ul>
+                        </div>
                     </div>
-                    <div class="modal-footer justify-content-center border-0 bg-light py-2">
-                        <button type="button" class="btn btn-sm btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+                    <div class="modal-footer bg-light">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
                         <form action="{{ url_for('main.delete_project', id=project.id) }}" method="POST">
-                            <button type="submit" class="btn btn-sm btn-danger fw-bold">Sim, Excluir</button>
+                            <button type="submit" class="btn btn-danger fw-bold">Sim, Apagar Tudo</button>
                         </form>
                     </div>
                 </div>
@@ -66,28 +141,94 @@
 </div>
 
 <div class="modal fade" id="newProjectModal" tabindex="-1">
-    <div class="modal-dialog">
-        <form method="POST" action="{{ url_for('main.new_project') }}">
+    <div class="modal-dialog modal-lg">
+        <form method="POST" action="{{ url_for('main.add_project') }}">
             <div class="modal-content border-0 shadow-lg">
                 <div class="modal-header bg-primary text-white">
                     <h5 class="modal-title fw-bold"><i class="fas fa-plus-circle me-2"></i>Adicionar Novo Alvo</h5>
                     <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
                 </div>
+
                 <div class="modal-body p-4">
-                    <div class="mb-3">
-                        <label class="form-label fw-bold">Nome do Projeto</label>
-                        <input type="text" name="name" class="form-control" placeholder="Ex: Programa BugBounty X"
-                            required>
-                    </div>
-                    <div class="mb-3">
-                        <label class="form-label fw-bold">Domínio Principal (Escopo)</label>
-                        <div class="input-group">
-                            <span class="input-group-text bg-light"><i class="fas fa-globe"></i></span>
-                            <input type="text" name="target" class="form-control" placeholder="Ex: alvo.com" required>
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label fw-bold">Nome do Projeto</label>
+                            <input type="text" name="name" class="form-control" placeholder="Ex: Programa BugBounty X" required>
                         </div>
-                        <div class="form-text text-muted">Não inclua http:// ou https://</div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label fw-bold">Domínio Principal (Escopo)</label>
+                            <div class="input-group">
+                                <span class="input-group-text bg-light"><i class="fas fa-globe"></i></span>
+                                <input type="text" name="target_url" class="form-control" placeholder="Ex: alvo.com" required>
+                            </div>
+                            <div class="form-text text-muted">Não inclua http:// ou https://</div>
+                        </div>
+                    </div>
+
+                    <hr class="my-4 text-muted">
+
+                    <div class="mb-3 p-3 bg-light rounded border">
+                        <div class="form-check form-switch">
+                            <input class="form-check-input" type="checkbox" id="autoDiscoverySwitch"
+                                name="auto_discovery" checked>
+                            <label class="form-check-label fw-bold" for="autoDiscoverySwitch">
+                                Habilitar Descoberta Automática
+                            </label>
+                        </div>
+
+                        <div class="form-text small mt-2">
+                            <span id="discoveryTextOn" class="text-success">
+                                <i class="fas fa-magic me-1"></i> O sistema irá rodar <strong>Subfinder e Amass</strong>
+                                para encontrar novos subdomínios.
+                            </span>
+                            <span id="discoveryTextOff" class="text-secondary d-none">
+                                <i class="fas fa-hand-paper me-1"></i> O sistema usará <strong>apenas</strong> os
+                                domínios listados em "In Scope".
+                            </span>
+                        </div>
+                    </div>
+
+                    <div class="mb-4 p-3 bg-light rounded border">
+                        <div class="form-check form-switch">
+                            <input class="form-check-input" type="checkbox" id="fuzzingSwitch" name="enable_fuzzing">
+                            <label class="form-check-label fw-bold" for="fuzzingSwitch">
+                                Habilitar Fuzzing no Baseline (FFuf)
+                            </label>
+                        </div>
+                        <div class="form-text small mt-2">
+                            <i class="fas fa-search-plus me-1"></i>
+                            Se marcado, o sistema irá buscar diretórios ocultos (ex: /.git, /admin) logo na criação do
+                            projeto.
+                            <span class="text-warning d-block mt-1">
+                                <i class="fas fa-clock me-1"></i> Isso tornará a criação do projeto mais lenta.
+                            </span>
+                        </div>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label fw-bold text-success">
+                                <i class="fas fa-plus-circle me-1"></i> Adicionar ao Escopo (Manual)
+                            </label>
+                            
+                            <textarea name="in_scope" class="form-control font-monospace small" rows="5"
+                                placeholder="login.alvo.com&#10;blog.alvo.com"></textarea>
+
+                            <div class="form-text">Domínios digitados aqui serão escaneados.</div>
+                        </div>
+
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label fw-bold text-danger">
+                                <i class="fas fa-ban me-1"></i> Out of Scope
+                            </label>
+                            
+                            <textarea name="out_of_scope" class="form-control font-monospace small" rows="5"
+                                placeholder="store.alvo.com&#10;mail.alvo.com"></textarea>
+                            <div class="form-text">Estes domínios serão <strong>ignorados</strong> pelo scanner.</div>
+                        </div>
                     </div>
                 </div>
+
                 <div class="modal-footer bg-light">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
                     <button type="submit" class="btn btn-primary fw-bold px-4">Criar Projeto</button>
@@ -96,6 +237,19 @@
         </form>
     </div>
 </div>
+
+<script>
+    // Lógica visual para o Switch de Descoberta (Apenas para o modal de Criação)
+    document.getElementById('autoDiscoverySwitch').addEventListener('change', function () {
+        if (this.checked) {
+            document.getElementById('discoveryTextOn').classList.remove('d-none');
+            document.getElementById('discoveryTextOff').classList.add('d-none');
+        } else {
+            document.getElementById('discoveryTextOn').classList.add('d-none');
+            document.getElementById('discoveryTextOff').classList.remove('d-none');
+        }
+    });
+</script>
 
 <script>
     document.addEventListener("DOMContentLoaded", function () {

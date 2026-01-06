@@ -45,24 +45,36 @@ graph TD
 
 ## 🚀 Funcionalidades Principais
 
-### 🔍 Reconhecimento (Recon) Híbrido
-
-* **Discovery:** Combinação de *Subfinder* e *Amass* (Passive) para máxima cobertura de subdomínios.
-* **Live Check:** Filtragem de hosts ativos e coleta de *Tech Stack* (Wappalyzer logic) via *HTTPX*.
-* **Port Scanning:** Varredura rápida de portas Top 100/1000 com *Naabu*.
+### 🔍 Reconhecimento (Recon) Flexível
+* **Modos de Operação:**
+    * **Automático:** Combinação de *Subfinder* e *Amass* para descoberta massiva.
+    * **Híbrido e Manual:** O sistema processa o domínio principal E qualquer subdomínio inserido manualmente na lista "In-Scope", garantindo que ativos conhecidos sejam escaneados mesmo que não sejam descobertos automaticamente.
+* **Live Check:** Filtragem de hosts ativos e coleta de *Tech Stack* via *HTTPX*.
+* **Port Scanning:** Varredura rápida (Top 100) com *Naabu*, com filtros inteligentes para ignorar blocos CIDR/IPs massivos.
 * **Enriquecimento:** Coleta automática de DNS (CNAME, MX) e IPs.
 
 ### 🛡️ Vulnerability Scanning
-
 * **Engine de Templates:** Uso do *Nuclei* para detecção de CVEs, Misconfigurations e Exposures.
 * **Pipeline XSS:** Fluxo integrado: `Crawler (Katana)` → `Histórico (GAU)` → `Scanner (Dalfox)`.
-* **CMS Intel:** Detecção precisa de versões de CMS (WordPress, Joomla, Drupal) via *CMSeeK*.
+* **Smart Fuzzing:** Detecção de diretórios ocultos (*FFuf*) e CMS (*CMSeeK*).
+    * *Configurável:* Toggle para ativar/desativar no Baseline.
+    * *Automático:* Execução autônoma em novos subdomínios descobertos.
+* **Controle de Escopo Dinâmico:**
+    * *Out-of-Scope Dinâmico:* Domínios/IPs adicionados aqui são automaticamente ignorados em todas as fases do scan.
+    * *In-Scope Persistente:* O que você digita manualmente fica salvo.
+    * *Limpeza Retroativa:* Ao adicionar um domínio ou wildcard (*https://www.google.com/search?q=.dev.com) ao "Out of Scope", o sistema remove automaticamente registros proibidos já existentes no banco.
+
+### 💻 Interface & Gestão
+* **Dashboard Interativo:** Monitoramento em tempo real com estatísticas e logs de progresso.
+* **Gestão Completa:** Criação, Edição e Exclusão de projetos e escopos.
+* **Busca Inteligente:** Filtros avançados no estilo Discord (ex: `status:200 tech:nginx`).
 
 ### ⚙️ Diferenciais de Engenharia
 
-* **Smart Fuzzing:** O sistema diferencia subdomínios novos de antigos. O Fuzzing pesado (FFuf) roda **apenas em novos ativos**, economizando recursos e tempo.
-* **Auto-Healing:** O container Web aguarda o Banco de Dados estar saudável antes de iniciar, evitando *Race Conditions*.
-* **Seeding Automático:** O usuário Admin é criado automaticamente na primeira inicialização via variáveis de ambiente.
+* **Frontend Otimizado (HTMX):** Utiliza **Polling Adaptativo** (3s para scans ativos, 60s para ociosos), reduzindo drasticamente o consumo de rede e CPU.
+* **Task Auto-Healing:** O sistema detecta automaticamente scans "zumbis" (travados por reinício de servidor) e corrige o status no Dashboard sem intervenção humana.
+* **Smart Filtering:** Lógica de limpeza robusta para evitar que ferramentas de Recon tragam "lixo" (wildcards, ASNs, Ranges de IP de Cloud) para o banco de dados.
+* **Seeding Automático:** O usuário Admin é criado automaticamente na primeira inicialização.
 
 ---
 
@@ -106,8 +118,7 @@ cd BugBounty_Monitor
 Crie um arquivo `.env` na raiz:
 
 ```bash
-cp .env.example .env  # Se houver um exemplo, ou crie manualmente
-
+cp .env.example .env
 ```
 
 **Tabela de Configuração (.env):**

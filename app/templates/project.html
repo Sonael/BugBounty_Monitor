@@ -2,16 +2,25 @@
 
 {% block content %}
 
+{% set refresh_rate = 'every 10s' if project.scan_status in ['Rodando', 'Na fila'] else 'every 60s' %}
+
 <div class="card border-0 shadow-sm mb-4">
     <div class="card-body p-4">
         <div class="d-flex justify-content-between align-items-center mb-4">
             <a href="{{ url_for('main.dashboard') }}" class="btn btn-outline-secondary btn-sm fw-bold shadow-sm">
                 <i class="fas fa-arrow-left me-2"></i>Voltar para Dashboard
             </a>
-            <button type="button" class="btn btn-outline-danger btn-sm fw-bold shadow-sm" data-bs-toggle="modal"
-                data-bs-target="#deleteModal">
-                <i class="fas fa-trash-alt me-2"></i>Excluir Projeto
-            </button>
+
+            <div>
+                <button type="button" class="btn btn-outline-primary btn-sm fw-bold shadow-sm me-2"
+                    data-bs-toggle="modal" data-bs-target="#editModal">
+                    <i class="fas fa-edit me-2"></i>Editar
+                </button>
+                <button type="button" class="btn btn-outline-danger btn-sm fw-bold shadow-sm" data-bs-toggle="modal"
+                    data-bs-target="#deleteModal">
+                    <i class="fas fa-trash-alt me-2"></i>Excluir
+                </button>
+            </div>
         </div>
 
         <div class="row align-items-center">
@@ -48,9 +57,8 @@
                 <button class="nav-link fw-bold border" id="domains-tab" data-bs-toggle="pill" data-bs-target="#domains"
                     type="button">
                     <i class="fas fa-sitemap me-2"></i>Subdomínios
-
                     <span class="badge bg-secondary ms-2 rounded-pill"
-                        hx-get="{{ url_for('main.count_domains', id=project.id) }}" hx-trigger="every 2s"
+                        hx-get="{{ url_for('main.count_domains', id=project.id) }}" hx-trigger="{{ refresh_rate }}"
                         hx-swap="innerHTML">
                         {{ stats.total }}
                     </span>
@@ -73,12 +81,8 @@
                                 <th class="bg-light" style="width: 200px;">Local</th>
                             </tr>
                         </thead>
-                        <tbody id="vuln-table-body" 
-                            hx-get="{{ url_for('main.project_vulns_part', id=project.id) }}"
-                            hx-trigger="every 5s" 
-                            hx-ext="morph" 
-                            hx-swap="morph:innerHTML">
-                            
+                        <tbody id="vuln-table-body" hx-get="{{ url_for('main.project_vulns_part', id=project.id) }}"
+                            hx-trigger="{{ refresh_rate }}" hx-ext="morph" hx-swap="morph:innerHTML">
                             {% include 'partials/vulns_list.html' %}
                         </tbody>
                     </table>
@@ -86,68 +90,34 @@
             </div>
 
             <div class="tab-pane fade" id="domains">
-                <div class="d-flex flex-wrap gap-2 mb-4" id="filter-group"
-                    hx-get="{{ url_for('main.project_stats', id=project.id) }}" 
-                    hx-trigger="every 5s" 
-                    hx-swap="none"
-                    hx-on::after-request="updateBadges(event)">
 
-                    <button class="btn btn-outline-secondary btn-sm filter-btn active px-3 rounded-pill"
-                        onclick="setActive(this)" 
-                        hx-get="{{ url_for('main.project_domains_part', id=project.id) }}"
-                        hx-target="#domains-content" 
-                        hx-indicator="#domains-wrapper"
-                        hx-ext="morph"
-                        hx-swap="morph:innerHTML"
-                        hx-trigger="load, click">
-                        Todos <span id="stat-total" class="badge bg-secondary ms-1">{{ stats.total }}</span>
-                    </button>
+                <div class="mb-4 position-relative">
+                    <div class="input-group shadow-sm">
+                        <button class="btn btn-outline-secondary bg-white border-end-0 text-muted" type="button"
+                            onclick="htmx.trigger('#discord-search', 'search')" title="Pesquisar">
+                            <i class="fas fa-search"></i>
+                        </button>
 
-                    <button class="btn btn-outline-success btn-sm filter-btn px-3 rounded-pill"
-                        onclick="setActive(this)"
-                        hx-get="{{ url_for('main.project_domains_part', id=project.id, status='ok') }}"
-                        hx-target="#domains-content" 
-                        hx-indicator="#domains-wrapper"
-                        hx-ext="morph"
-                        hx-swap="morph:innerHTML">
-                        <i class="fas fa-check-circle me-1"></i>200 OK
-                        <span id="stat-ok" class="badge bg-success ms-1">{{ stats.ok }}</span>
-                    </button>
+                        <input type="text" id="discord-search" name="q" class="form-control border-start-0 ps-0"
+                            placeholder="Filtrar... (Clique para ver opções)" autocomplete="off"
+                            hx-get="{{ url_for('main.project_domains_part', id=project.id) }}"
+                            hx-target="#domains-content" hx-indicator="#domains-wrapper"
+                            hx-trigger="load, keyup[key=='Enter'], search" hx-swap="innerHTML">
 
-                    <button class="btn btn-outline-info btn-sm filter-btn px-3 rounded-pill" onclick="setActive(this)"
-                        hx-get="{{ url_for('main.project_domains_part', id=project.id, status='redirect') }}"
-                        hx-target="#domains-content" 
-                        hx-indicator="#domains-wrapper"
-                        hx-ext="morph"
-                        hx-swap="morph:innerHTML">
-                        <i class="fas fa-exchange-alt me-1"></i>Redirects
-                        <span id="stat-redirect" class="badge bg-info ms-1">{{ stats.redirect }}</span>
-                    </button>
+                        <button class="btn btn-outline-secondary" type="button"
+                            onclick="document.getElementById('discord-search').value = ''; htmx.trigger('#discord-search', 'search')">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
 
-                    <button class="btn btn-outline-warning btn-sm filter-btn px-3 rounded-pill"
-                        onclick="setActive(this)"
-                        hx-get="{{ url_for('main.project_domains_part', id=project.id, status='error') }}"
-                        hx-target="#domains-content" 
-                        hx-indicator="#domains-wrapper"
-                        hx-ext="morph"
-                        hx-swap="morph:innerHTML">
-                        <i class="fas fa-exclamation-triangle me-1"></i>Erros (4xx/5xx)
-                        <span id="stat-error" class="badge bg-warning text-dark ms-1">{{ stats.error }}</span>
-                    </button>
-
-                    <button class="btn btn-outline-dark btn-sm filter-btn px-3 rounded-pill" onclick="setActive(this)"
-                        hx-get="{{ url_for('main.project_domains_part', id=project.id, status='dead') }}"
-                        hx-target="#domains-content" 
-                        hx-indicator="#domains-wrapper"
-                        hx-ext="morph"
-                        hx-swap="morph:innerHTML">
-                        <i class="fas fa-skull-crossbones me-1"></i>Sem Resposta
-                        <span id="stat-dead" class="badge bg-dark ms-1">{{ stats.dead }}</span>
-                    </button>
+                    <div id="search-suggestions" class="list-group position-absolute w-100 shadow-lg d-none"
+                        style="z-index: 1000; top: 100%; max-height: 300px; overflow-y: auto;">
+                    </div>
                 </div>
 
-                <div id="domains-wrapper" class="table-responsive rounded border position-relative" style="max-height: 600px; overflow-y: auto;">
-                    
+                <div id="domains-wrapper" class="table-responsive rounded border position-relative"
+                    style="max-height: 600px; overflow-y: auto;">
+
                     <div id="domains-content">
                         {% include 'partials/domains_list.html' %}
                     </div>
@@ -190,23 +160,6 @@
                     </div>
                 </div>
 
-                <script>
-                    function updateBadges(evt) {
-                        if (evt.detail.successful) {
-                            const data = JSON.parse(evt.detail.xhr.responseText);
-                            document.getElementById('stat-total').innerText = data.total;
-                            document.getElementById('stat-ok').innerText = data.ok;
-                            document.getElementById('stat-redirect').innerText = data.redirect;
-                            document.getElementById('stat-error').innerText = data.error;
-                            document.getElementById('stat-dead').innerText = data.dead;
-                        }
-                    }
-
-                    function setActive(clickedBtn) {
-                        document.querySelectorAll('#filter-group .filter-btn').forEach(btn => btn.classList.remove('active', 'fw-bold'));
-                        clickedBtn.classList.add('active', 'fw-bold');
-                    }
-                </script>
             </div>
         </div>
     </div>
@@ -226,8 +179,8 @@
                     <ul class="mb-0 small">
                         <li>
                             Todos os
-                            <strong hx-get="{{ url_for('main.count_domains', id=project.id) }}" hx-trigger="every 2s"
-                                hx-swap="innerHTML">
+                            <strong hx-get="{{ url_for('main.count_domains', id=project.id) }}"
+                                hx-trigger="{{ refresh_rate }}" hx-swap="innerHTML">
                                 {{ project.domains|length }}
                             </strong>
                             subdomínios serão perdidos.
@@ -245,4 +198,282 @@
         </div>
     </div>
 </div>
+
+<div class="modal fade" id="editModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <form method="POST" action="{{ url_for('main.edit_project', id=project.id) }}">
+            <div class="modal-content border-0 shadow-lg">
+                <div class="modal-header bg-primary text-white">
+                    <h5 class="modal-title fw-bold"><i class="fas fa-edit me-2"></i>Editar Projeto</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+
+                <div class="modal-body p-4">
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label fw-bold">Nome do Projeto</label>
+                            <input type="text" name="name" class="form-control" value="{{ project.name }}" required>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label fw-bold">Domínio Principal (Escopo)</label>
+                            <div class="input-group">
+                                <span class="input-group-text bg-light"><i class="fas fa-globe"></i></span>
+                                <input type="text" name="target_url" class="form-control"
+                                    value="{{ project.target_url }}" required>
+                            </div>
+                        </div>
+                    </div>
+
+                    <hr class="my-4 text-muted">
+
+                    <div class="mb-3 p-3 bg-light rounded border">
+                        <div class="form-check form-switch">
+                            <input class="form-check-input" type="checkbox" name="auto_discovery" {% if
+                                project.discovery_enabled %}checked{% endif %}>
+                            <label class="form-check-label fw-bold">Habilitar Descoberta Automática</label>
+                        </div>
+                    </div>
+
+                    <div class="mb-4 p-3 bg-light rounded border">
+                        <div class="form-check form-switch">
+                            <input class="form-check-input" type="checkbox" name="enable_fuzzing" {% if
+                                project.fuzzing_enabled %}checked{% endif %}>
+                            <label class="form-check-label fw-bold">Habilitar Fuzzing (FFuf)</label>
+                        </div>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label fw-bold text-success">
+                                <i class="fas fa-plus-circle me-1"></i> Adicionar ao Escopo (Manual)
+                            </label>
+
+                            <textarea name="in_scope" class="form-control font-monospace small" rows="5"
+                                placeholder="Digite novos domínios aqui...">{{ project.in_scope or '' }}</textarea>
+
+                            <div class="form-text">Domínios digitados aqui serão escaneados.</div>
+                        </div>
+
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label fw-bold text-danger">
+                                <i class="fas fa-ban me-1"></i> Out of Scope (Ignorar)
+                            </label>
+                            <textarea name="out_of_scope" class="form-control font-monospace small"
+                                rows="5">{{ project.out_of_scope or '' }}</textarea>
+                            <div class="form-text">Edite a lista de bloqueios.</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="modal-footer bg-light">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+                    <button type="submit" class="btn btn-primary fw-bold px-4">Salvar Alterações</button>
+                </div>
+            </div>
+        </form>
+    </div>
+</div>
+
+<style>
+    /* Estilo do Dropdown estilo Discord */
+    #search-suggestions {
+        border-radius: 0 0 8px 8px;
+        border-top: none;
+    }
+
+    #search-suggestions .list-group-item {
+        cursor: pointer;
+        border-left: 3px solid transparent;
+        font-family: 'Segoe UI', sans-serif;
+        padding: 10px 15px;
+        transition: all 0.1s;
+    }
+
+    #search-suggestions .list-group-item:hover {
+        background-color: #f0f2f5;
+        border-left-color: var(--accent-blue);
+    }
+
+    /* Estilo das Chaves e Valores */
+    .suggestion-key {
+        font-weight: 600;
+        color: var(--text-dark);
+        background-color: #e9ecef;
+        padding: 2px 6px;
+        border-radius: 4px;
+        font-size: 0.9em;
+    }
+
+    .suggestion-desc {
+        font-size: 0.85em;
+        color: #adb5bd;
+        float: right;
+    }
+
+    .suggestion-icon {
+        width: 25px;
+        text-align: center;
+        margin-right: 5px;
+        color: var(--text-muted);
+    }
+</style>
+
+<script>
+    document.addEventListener("DOMContentLoaded", function () {
+        const input = document.getElementById('discord-search');
+        const suggestionBox = document.getElementById('search-suggestions');
+
+        // CORREÇÃO AQUI: Garante que as chaves estejam corretas
+        const projectId = {{ project.id }};
+
+    const icons = {
+        'status:': '<i class="fas fa-server"></i>',
+        'tech:': '<i class="fas fa-code"></i>',
+        'portas:': '<i class="fas fa-ethernet"></i>',
+        'path:': '<i class="fas fa-folder-open"></i>',
+        'subdominio:': '<i class="fas fa-globe"></i>'
+    };
+
+    let cachedOptions = null;
+
+    // Carrega opções do backend (chaves e valores disponíveis)
+    fetch(`/api/project/${projectId}/search_options`)
+        .then(r => r.json())
+        .then(data => { cachedOptions = data; })
+        .catch(err => console.log("Erro ao carregar opções", err));
+
+    // Função Principal de Renderização
+    function updateSuggestions() {
+        const val = input.value;
+        const cursorPos = input.selectionStart;
+
+        // Pega a palavra onde o cursor está
+        const textBeforeCursor = val.substring(0, cursorPos);
+        const words = textBeforeCursor.split(" ");
+        const currentWord = words[words.length - 1];
+
+        let matches = [];
+
+        // ---------------------------------------------------------
+        // CASO 0: Barra Vazia ou Espaço (Mostrar TODOS os filtros)
+        // ---------------------------------------------------------
+        if (!currentWord) {
+            if (cachedOptions && cachedOptions.keys) {
+                matches = cachedOptions.keys.map(k => ({
+                    text: k,
+                    display: `
+                        <span class="suggestion-icon">${icons[k] || '<i class="fas fa-filter"></i>'}</span>
+                        <span class="suggestion-key text-dark bg-transparent p-0">${k.replace(':', '')}</span> 
+                        <span class="text-muted ms-1">:</span>
+                        <span class="suggestion-desc">Filtro</span>
+                    `,
+                    type: 'key'
+                }));
+            }
+        }
+        // ---------------------------------------------------------
+        // CASO 1: Digitando uma chave (Ex: "st")
+        // ---------------------------------------------------------
+        else if (!currentWord.includes(':')) {
+            if (cachedOptions && cachedOptions.keys) {
+                matches = cachedOptions.keys
+                    .filter(k => k.startsWith(currentWord.toLowerCase()))
+                    .map(k => ({
+                        text: k,
+                        display: `
+                            <span class="suggestion-icon">${icons[k] || '<i class="fas fa-filter"></i>'}</span>
+                            <span class="suggestion-key">${k}</span> 
+                            <span class="suggestion-desc">Filtro</span>
+                        `,
+                        type: 'key'
+                    }));
+            }
+        }
+        // ---------------------------------------------------------
+        // CASO 2: Digitando valor (Ex: "status:2")
+        // ---------------------------------------------------------
+        else {
+            const [key, partialVal] = currentWord.split(':');
+            const cleanKey = key.toLowerCase();
+
+            let optionsList = [];
+            if (cleanKey === 'status') optionsList = cachedOptions.status;
+            else if (['tech', 'tecnologias'].includes(cleanKey)) optionsList = cachedOptions.tech;
+            else if (['portas', 'ports'].includes(cleanKey)) optionsList = cachedOptions.ports;
+            else if (['path', 'paths'].includes(cleanKey)) optionsList = cachedOptions.paths;
+
+            if (optionsList) {
+                matches = optionsList
+                    .filter(v => v.toString().toLowerCase().startsWith(partialVal.toLowerCase()))
+                    .map(v => ({
+                        text: `${key}:${v}`,
+                        display: `
+                            <span class="suggestion-icon">${icons[key + ':'] || '<i class="fas fa-tag"></i>'}</span>
+                            <span class="text-muted">${key}:</span> 
+                            <span class="fw-bold text-dark ms-1">${v}</span>
+                        `,
+                        type: 'value'
+                    }));
+            }
+        }
+
+        // Renderiza HTML
+        if (matches.length > 0) {
+            suggestionBox.innerHTML = matches.map(m =>
+                `<div class="list-group-item list-group-item-action d-flex align-items-center" 
+                      onclick="applySuggestion('${m.text}')">
+                    ${m.display}
+                 </div>`
+            ).join('');
+            suggestionBox.classList.remove('d-none');
+        } else {
+            suggestionBox.classList.add('d-none');
+        }
+    }
+
+    // Eventos que ativam as sugestões
+    input.addEventListener('keyup', updateSuggestions);
+    input.addEventListener('focus', updateSuggestions); // Ao clicar na barra
+    input.addEventListener('click', updateSuggestions); // Ao mover cursor
+
+    // Fecha ao clicar fora
+    document.addEventListener('click', function (e) {
+        if (e.target !== input && e.target !== suggestionBox && !suggestionBox.contains(e.target)) {
+            suggestionBox.classList.add('d-none');
+        }
+    });
+});
+
+    // Função chamada ao clicar em uma sugestão
+    window.applySuggestion = function (text) {
+        const input = document.getElementById('discord-search');
+        const val = input.value;
+        const words = val.split(" ");
+
+        // Troca a palavra atual pela sugestão
+        words.pop();
+        words.push(text);
+
+        // Se for Chave (ex: status:), não dá espaço, mantém para digitar valor
+        if (text.endsWith(':')) {
+            input.value = words.join(" ");
+        } else {
+            // Se for Valor, dá espaço para o próximo filtro
+            input.value = words.join(" ") + " ";
+        }
+
+        input.focus();
+
+        if (text.endsWith(':')) {
+            // Se escolheu um filtro, força o evento 'focus' para mostrar IMEDIATAMENTE os valores
+            const event = new Event('focus');
+            input.dispatchEvent(event);
+        } else {
+            // Se escolheu um valor, fecha o menu e busca
+            document.getElementById('search-suggestions').classList.add('d-none');
+            htmx.trigger(input, 'search');
+        }
+    };
+</script>
+
 {% endblock %}

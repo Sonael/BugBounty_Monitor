@@ -1,6 +1,8 @@
+{% set refresh_rate = 'every 3s' if project.scan_status in ['Rodando', 'Na fila'] else 'every 3s' %}
+
 <div id="scan-controls" 
      hx-get="{{ url_for('main.project_controls_part', id=project.id) }}" 
-     hx-trigger="every 2s" 
+     hx-trigger="{{ refresh_rate }}" 
      hx-swap="outerHTML">
      
     {% if project.scan_status == 'Rodando' %}

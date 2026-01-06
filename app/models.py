@@ -22,6 +22,12 @@ class Project(db.Model):
 
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     domains = db.relationship('Domain', backref='project', lazy=True, cascade="all, delete-orphan")
+    
+    out_of_scope = db.Column(db.Text, default="") 
+    in_scope = db.Column(db.Text, default="")
+    discovery_enabled = db.Column(db.Boolean, default=True)
+    
+    fuzzing_enabled = db.Column(db.Boolean, default=False)
 
 
 class Domain(db.Model):
@@ -38,6 +44,7 @@ class Domain(db.Model):
     dns_info = db.Column(db.Text, nullable=True)
     ip_address = db.Column(db.String(50), nullable=True)
     discovered_paths = db.Column(db.Text, nullable=True)
+    
 
 class Vulnerability(db.Model):
     id = db.Column(db.Integer, primary_key=True)

@@ -382,7 +382,7 @@ a {
 }
 
 .placeholder {
-    opacity: 0.3; /* Deixa cinza clarinho */
+    opacity: 0.3; 
 }
 
 /* =========================================
@@ -567,7 +567,6 @@ a {
     display: inline-flex;
     align-items: center;
     background-color: #e3e5e8;
-    /* Cor mais próxima do Discord */
     border: 1px solid #c7cdd1;
     border-radius: 4px;
     padding: 0px 6px;
@@ -624,13 +623,10 @@ a {
     float: right;
 }
 
-/* --- CORREÇÃO CRÍTICA DO LOADER --- */
-/* Isso garante que o loader SUMA quando não estiver em uso */
 #domains-skeleton {
     display: none !important;
     z-index: 50;
     backdrop-filter: blur(1px);
-    /* Efeito visual opcional */
 }
 
 /* Só aparece quando o HTMX ativa a classe */
@@ -642,7 +638,6 @@ a {
 .project-header-icon {
     min-width: 56px;
     height: 56px;
-    /* Gradiente Azul Profissional */
     background: linear-gradient(135deg, #0a2342 0%, #0066cc 100%);
     color: white;
     border-radius: 12px;

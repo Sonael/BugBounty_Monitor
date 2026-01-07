@@ -105,7 +105,7 @@
             // Roda ao carregar a página
             setupAlertAutoClose();
 
-            // Roda sempre que o HTMX trocar conteúdo (para funcionar com os alertas via AJAX)
+            // Roda sempre que o HTMX trocar conteúdo
             document.body.addEventListener('htmx:afterSwap', function(evt) {
                 setupAlertAutoClose();
             });

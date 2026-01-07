@@ -41,7 +41,7 @@ def logout():
 @login_required
 def dashboard():
     # ==============================================================================
-    # LÓGICA DE AUTO-HEALING (Mantida igual)
+    # LÓGICA DE AUTO-HEALING
     # ==============================================================================
     running_projects = Project.query.filter(
         Project.scan_status.in_(['Rodando', 'Na fila'])
@@ -87,7 +87,7 @@ def dashboard():
             print(f"[AUTO-HEAL ERROR] Falha ao inspecionar Celery: {e}")
 
     # ==============================================================================
-    # DADOS DO DASHBOARD (CORRIGIDO)
+    # DADOS DO DASHBOARD
     # ==============================================================================
     projects = Project.query.filter_by(user_id=current_user.id).all()
     
@@ -112,8 +112,7 @@ def dashboard():
         .filter(Project.user_id == current_user.id)\
         .group_by(Vulnerability.severity).all()
     
-    # Converte tudo para minúsculo para garantir a contagem correta
-    # Ex: 'Info', 'info', 'INFO' viram todos 'info'
+    # Converte tudo para minúsculo
     sev_counts_lower = {}
     for s in severity_query:
         if s[0]: # Garante que não é nulo
@@ -143,7 +142,6 @@ def dashboard():
         'pct_critical': calc_pct(crit),
         'pct_high': calc_pct(high),
         'pct_medium': calc_pct(med),
-        # AQUI: Soma Low + Info para a barra de progresso azul ficar correta
         'pct_low': calc_pct(low + info)
     }
 
@@ -300,7 +298,7 @@ def edit_project(id):
         project.discovery_enabled = discovery_enabled
         project.fuzzing_enabled = fuzzing_enabled
         
-        # 1. PROCESSA NOVOS DO IN_SCOPE (Adiciona)
+        # 1. PROCESSA NOVOS DO IN_SCOPE
         added_count = 0
         if in_scope_raw:
             domains_list = [line.strip() for line in in_scope_raw.splitlines() if line.strip()]
@@ -317,7 +315,7 @@ def edit_project(id):
         if not exists_main:
             db.session.add(Domain(name=target_clean, project_id=project.id))
             
-        # 2. LIMPEZA AUTOMÁTICA DO OUT_OF_SCOPE (Remove Proibidos)
+        # 2. LIMPEZA AUTOMÁTICA DO OUT_OF_SCOPE
         deleted_count = 0
         if out_of_scope_raw:
             # Prepara lista negra
@@ -345,7 +343,6 @@ def edit_project(id):
 
         db.session.commit()
         
-        # Feedback visual detalhado
         msgs = []
         if added_count > 0: msgs.append(f"{added_count} adicionados")
         if deleted_count > 0: msgs.append(f"{deleted_count} removidos (Out of Scope)")
@@ -439,7 +436,6 @@ def parse_discord_search(query_str):
             if key in ['subdominio', 'domain']: key = 'sub'
             
             if key in filters:
-                # LÓGICA NOVA:
                 # Para status, mesclamos tudo numa lista só (OR)
                 if key == 'status' or key == 'sub':
                     if ',' in value:

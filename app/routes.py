@@ -5,7 +5,7 @@ from . import db, celery
 from .models import User, Project, Domain, Vulnerability
 from .tasks import run_scan_task 
 import os
-from sqlalchemy import or_, and_
+from sqlalchemy import or_, and_, func
 import fnmatch
 
 
@@ -41,29 +41,22 @@ def logout():
 @login_required
 def dashboard():
     # ==============================================================================
-    # LÓGICA DE AUTO-HEALING (Limpeza Automática de Scans Travados)
+    # LÓGICA DE AUTO-HEALING (Mantida igual)
     # ==============================================================================
-    # 1. Busca todos os projetos que o banco diz que estão rodando
     running_projects = Project.query.filter(
         Project.scan_status.in_(['Rodando', 'Na fila'])
     ).all()
     
     if running_projects:
         try:
-            # 2. Pergunta ao Celery quais tarefas estão realmente vivas
-            # timeout curto (0.2s) para não deixar o carregamento da página lento
             inspector = celery.control.inspect(timeout=0.2)
+            active = inspector.active()    
+            reserved = inspector.reserved() 
+            scheduled = inspector.scheduled() 
             
-            active = inspector.active()    # Tarefas executando agora
-            reserved = inspector.reserved() # Tarefas na fila do worker
-            scheduled = inspector.scheduled() # Tarefas agendadas
-            
-            # Se active for None, os workers estão offline/inacessíveis
             workers_online = (active is not None)
-            
             real_task_ids = set()
             
-            # 3. Coleta os IDs reais se os workers estiverem online
             if workers_online:
                 for w_tasks in [active, reserved, scheduled]:
                     if w_tasks:
@@ -74,37 +67,97 @@ def dashboard():
             changes = 0
             for p in running_projects:
                 is_dead = False
-                
-                # Critério A: Não tem worker online -> O processo morreu.
                 if not workers_online:
                     is_dead = True
-                
-                # Critério B: Tem worker, mas o ID da tarefa desse projeto não está lá.
-                # Isso acontece quando o container reinicia e perde a memória RAM.
                 elif p.current_task_id and p.current_task_id not in real_task_ids:
-                    is_dead = True
-                
-                # Critério C: Projeto diz que roda, mas não tem ID de tarefa salvo.
+                    if p.scan_status == 'Rodando':
+                        is_dead = True
                 elif not p.current_task_id:
                     is_dead = True
                 
-                # APLICA A CORREÇÃO
                 if is_dead:
                     p.scan_status = 'Erro'
-                    p.scan_message = '🛑 Interrompido (Reinício do Sistema)'
+                    p.scan_message = '🛑 Interrompido (Reinício ou Falha)'
                     p.current_task_id = None
                     changes += 1
             
             if changes > 0:
                 db.session.commit()
-                flash(f'{changes} scans interrompidos foram corrigidos automaticamente.', 'warning')
-                
         except Exception as e:
             print(f"[AUTO-HEAL ERROR] Falha ao inspecionar Celery: {e}")
 
+    # ==============================================================================
+    # DADOS DO DASHBOARD (CORRIGIDO)
+    # ==============================================================================
     projects = Project.query.filter_by(user_id=current_user.id).all()
-    return render_template('dashboard.html', projects=projects)
+    
+    # 1. Estatísticas Globais
+    total_subs = Domain.query.join(Project).filter(Project.user_id == current_user.id).count()
+    total_vulns = Vulnerability.query.join(Domain).join(Project).filter(Project.user_id == current_user.id).count()
+    running_scans = Project.query.filter(
+        Project.user_id == current_user.id, 
+        Project.scan_status.in_(['Rodando', 'Na fila'])
+    ).count()
 
+    stats = {
+        'projects': len(projects),
+        'subdomains': total_subs,
+        'vulns': total_vulns,
+        'running': running_scans
+    }
+
+    # 2. Distribuição de Severidade (CORREÇÃO DE CASE SENSITIVE)
+    severity_query = db.session.query(Vulnerability.severity, func.count(Vulnerability.id))\
+        .join(Domain).join(Project)\
+        .filter(Project.user_id == current_user.id)\
+        .group_by(Vulnerability.severity).all()
+    
+    # Converte tudo para minúsculo para garantir a contagem correta
+    # Ex: 'Info', 'info', 'INFO' viram todos 'info'
+    sev_counts_lower = {}
+    for s in severity_query:
+        if s[0]: # Garante que não é nulo
+            key = str(s[0]).lower()
+            val = s[1]
+            sev_counts_lower[key] = sev_counts_lower.get(key, 0) + val
+
+    # Pega os valores normalizados
+    crit = sev_counts_lower.get('critical', 0)
+    high = sev_counts_lower.get('high', 0)
+    med = sev_counts_lower.get('medium', 0)
+    low = sev_counts_lower.get('low', 0)
+    info = sev_counts_lower.get('info', 0)
+    
+    # Recalcula total baseado apenas nessas categorias para a porcentagem
+    total_for_pct = crit + high + med + low + info
+    
+    def calc_pct(count):
+        return (count / total_for_pct * 100) if total_for_pct > 0 else 0
+
+    severity_stats = {
+        'critical': crit,
+        'high': high,
+        'medium': med,
+        'low': low,
+        'info': info,
+        'pct_critical': calc_pct(crit),
+        'pct_high': calc_pct(high),
+        'pct_medium': calc_pct(med),
+        # AQUI: Soma Low + Info para a barra de progresso azul ficar correta
+        'pct_low': calc_pct(low + info)
+    }
+
+    # 3. Feed de Atividade Recente
+    recent_activity = Domain.query.join(Project)\
+        .filter(Project.user_id == current_user.id)\
+        .order_by(Domain.first_seen.desc())\
+        .limit(5).all()
+
+    return render_template('dashboard.html', 
+                           projects=projects, 
+                           stats=stats, 
+                           severity=severity_stats, 
+                           recent_activity=recent_activity)
 
 @main.route('/add_project', methods=['POST'])
 @login_required

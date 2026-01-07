@@ -182,15 +182,25 @@ def run_scan_task(self, project_id, mode='full'):
                     # --- LÓGICA DE FUZZING OTIMIZADA ---
                     should_fuzz = False
                     
-                    # Regra 1: Baseline (Criação) -> Só se o botão Fuzzing estiver ligado
-                    if mode == 'baseline':
-                        if project.fuzzing_enabled:
+                    # Só roda se o botão "Habilitar Fuzzing" estiver ligado no projeto
+                    if project.fuzzing_enabled:
+                        
+                        # REGRA 1: Modo Baseline
+                        # No Baseline, ignoramos se está no banco ou não. 
+                        # Tratamos TUDO como alvo de Fuzzing (Principal + Novos).
+                        # Isso simula o "is_new_entry = True" que você queria para o domínio principal.
+                        if mode == 'baseline':
                             should_fuzz = True
-                    
-                    # Regra 2: Recon/Full (Manutenção) -> Só em NOVOS ou se Discovery desligado
-                    else:
-                        if is_new_entry:
+                            
+                        # REGRA 2: Outros Modos (Recon/Full)
+                        # Aqui voltamos ao comportamento padrão: só fuzza o que realmente 
+                        # acabou de ser descoberto (não estava no banco).
+                        elif is_new_entry:
                             should_fuzz = True
+                            
+                        # REGRA 3: Scan Manual (Descoberta Off)
+                        # Se o usuário desligou o Subfinder/Amass, ele quer testar a lista fixa.
+                        # Então forçamos o fuzzing nos itens existentes.
                         elif not project.discovery_enabled:
                             should_fuzz = True
 

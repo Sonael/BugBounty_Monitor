@@ -40,7 +40,7 @@ class Domain(db.Model):
     technologies = db.Column(db.Text, nullable=True)
     project_id = db.Column(db.Integer, db.ForeignKey('project.id'), nullable=False)
     vulnerabilities = db.relationship('Vulnerability', backref='domain', lazy=True, cascade="all, delete-orphan")
-    open_ports = db.Column(db.String(200), nullable=True) 
+    open_ports = db.Column(db.Text, nullable=True)
     dns_info = db.Column(db.Text, nullable=True)
     ip_address = db.Column(db.String(50), nullable=True)
     discovered_paths = db.Column(db.Text, nullable=True)

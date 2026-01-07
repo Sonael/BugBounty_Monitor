@@ -384,3 +384,271 @@ a {
 .placeholder {
     opacity: 0.3; /* Deixa cinza clarinho */
 }
+
+/* =========================================
+   DASHBOARD HEADER
+   ========================================= */
+
+.dashboard-header-container {
+    background-color: transparent;
+    padding-bottom: 1.5rem;
+    border-bottom: 1px solid rgba(0, 0, 0, 0.05); /* Linha sutil separadora */
+    margin-bottom: 2rem;
+}
+
+.header-icon-box {
+    width: 56px;
+    height: 56px;
+    /* Gradiente usando as variáveis do seu root */
+    background: linear-gradient(135deg, var(--primary-blue) 0%, var(--accent-blue) 100%);
+    color: var(--white);
+    border-radius: 12px; /* Cantos levemente arredondados */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.75rem;
+    box-shadow: 0 4px 10px rgba(0, 102, 204, 0.25); /* Sombra suave azulada */
+    transition: transform 0.3s ease;
+}
+
+.header-icon-box:hover {
+    transform: scale(1.05) rotate(3deg);
+}
+
+.dashboard-title {
+    font-size: 1.8rem;
+    font-weight: 700;
+    color: var(--primary-blue);
+    letter-spacing: -0.5px;
+    margin-bottom: 0.2rem;
+}
+
+.dashboard-subtitle {
+    font-size: 0.95rem;
+    color: var(--text-muted);
+    font-weight: 500;
+}
+
+/* Badge de data/status no canto */
+.header-meta-badge {
+    background-color: var(--white);
+    color: var(--text-dark);
+    border: 1px solid var(--border-color);
+    padding: 0.5rem 1rem;
+    border-radius: 8px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    box-shadow: var(--card-shadow);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+
+/* =========================================
+   CARDS DE ESTATÍSTICA (STATS ROW)
+   ========================================= */
+.stat-card {
+    border: none;
+    background: var(--white);
+    box-shadow: var(--card-shadow);
+    border-radius: 12px;
+    padding: 1.5rem;
+    position: relative;
+    overflow: hidden;
+    transition: transform 0.3s ease, box-shadow 0.3s ease;
+    border-left: 4px solid transparent; /* Borda colorida lateral */
+}
+
+.stat-card:hover {
+    transform: translateY(-5px);
+    box-shadow: var(--card-hover-shadow);
+}
+
+.stat-icon {
+    width: 50px;
+    height: 50px;
+    border-radius: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.5rem;
+    margin-right: 1rem;
+}
+
+.stat-value {
+    font-size: 2rem;
+    font-weight: 700;
+    line-height: 1;
+    color: var(--primary-blue);
+    margin-bottom: 0.2rem;
+}
+
+.stat-label {
+    font-size: 0.75rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    letter-spacing: 0.5px;
+}
+
+/* Variações de Cores */
+.stat-primary { border-left-color: var(--accent-blue); }
+.stat-primary .stat-icon { background: rgba(0, 102, 204, 0.1); color: var(--accent-blue); }
+
+.stat-success { border-left-color: #28a745; }
+.stat-success .stat-icon { background: rgba(40, 167, 69, 0.1); color: #28a745; }
+
+.stat-warning { border-left-color: #ffc107; }
+.stat-warning .stat-icon { background: rgba(255, 193, 7, 0.1); color: #ffc107; }
+
+.stat-danger { border-left-color: #dc3545; }
+.stat-danger .stat-icon { background: rgba(220, 53, 69, 0.1); color: #dc3545; }
+
+
+#flash-overlay {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    z-index: 1060; /* Maior que o Navbar e Modais */
+    width: 350px;
+    max-width: 90vw;
+    pointer-events: none; /* Permite clicar através da área vazia */
+}
+#flash-overlay .alert {
+    pointer-events: auto; /* Reativa cliques no alerta em si */
+    box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.15);
+    animation: slideIn 0.5s ease-out;
+}
+@keyframes slideIn {
+    from { transform: translateX(100%); opacity: 0; }
+    to { transform: translateX(0); opacity: 1; }
+}
+
+
+/* Estilos das Abas */
+.nav-tabs .nav-link {
+    color: var(--text-muted);
+    font-weight: 600;
+    border: none;
+    border-bottom: 3px solid transparent;
+    padding: 1rem 1.5rem;
+    transition: all 0.2s;
+}
+
+.nav-tabs .nav-link:hover {
+    color: var(--primary-blue);
+    border-color: rgba(0, 0, 0, 0.1);
+}
+
+.nav-tabs .nav-link.active {
+    color: var(--accent-blue);
+    border-bottom: 3px solid var(--accent-blue);
+    background: transparent;
+}
+
+
+/* Input Fake estilo Discord */
+.discord-search-wrapper {
+    min-height: 38px;
+    cursor: text;
+    background-color: #fff;
+    transition: border-color .15s ease-in-out, box-shadow .15s ease-in-out;
+}
+
+.discord-search-wrapper:focus-within {
+    border-color: #86b7fe;
+    outline: 0;
+    box-shadow: 0 0 0 0.25rem rgba(13, 110, 253, 0.25);
+}
+
+/* O Chip (Etiqueta) */
+.search-chip {
+    display: inline-flex;
+    align-items: center;
+    background-color: #e3e5e8;
+    /* Cor mais próxima do Discord */
+    border: 1px solid #c7cdd1;
+    border-radius: 4px;
+    padding: 0px 6px;
+    margin: 2px;
+    font-size: 0.9em;
+    user-select: none;
+    color: #2c2f33;
+    height: 28px;
+}
+
+/* A Chave (status:) */
+.chip-key {
+    font-weight: 500;
+    color: #5865f2;
+    /* Azul Discord */
+}
+
+/* O Valor (200, 500) */
+.chip-val {
+    font-weight: 700;
+    color: #23272a;
+    margin-left: 2px;
+}
+
+/* Input real invisível */
+#discord-search-input {
+    border: none;
+    outline: none;
+    background: transparent;
+    min-width: 150px;
+    color: #212529;
+    margin-left: 4px;
+}
+
+/* Dropdown */
+#search-suggestions {
+    top: 100%;
+    margin-top: 5px;
+    border-radius: 6px;
+    border: 1px solid #dee2e6;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+    z-index: 1050;
+}
+
+.suggestion-icon {
+    width: 25px;
+    text-align: center;
+    color: #adb5bd;
+}
+
+.suggestion-desc {
+    font-size: 0.8em;
+    color: #adb5bd;
+    float: right;
+}
+
+/* --- CORREÇÃO CRÍTICA DO LOADER --- */
+/* Isso garante que o loader SUMA quando não estiver em uso */
+#domains-skeleton {
+    display: none !important;
+    z-index: 50;
+    backdrop-filter: blur(1px);
+    /* Efeito visual opcional */
+}
+
+/* Só aparece quando o HTMX ativa a classe */
+#domains-skeleton.htmx-request {
+    display: flex !important;
+}
+
+/* Ícone do Cabeçalho do Projeto */
+.project-header-icon {
+    min-width: 56px;
+    height: 56px;
+    /* Gradiente Azul Profissional */
+    background: linear-gradient(135deg, #0a2342 0%, #0066cc 100%);
+    color: white;
+    border-radius: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.5rem;
+    box-shadow: 0 8px 16px rgba(0, 102, 204, 0.15);
+}

@@ -3,7 +3,7 @@ from flask_login import login_user, login_required, current_user, logout_user
 from werkzeug.security import generate_password_hash, check_password_hash
 from . import db, celery
 from .models import User, Project, Domain, Vulnerability
-from .tasks import run_scan_task 
+from .tasks import run_scan_task, run_daily_scan
 import os
 from sqlalchemy import or_, and_, func
 import fnmatch
@@ -41,7 +41,7 @@ def logout():
 @login_required
 def dashboard():
     # ==============================================================================
-    # LÓGICA DE AUTO-HEALING
+    # LÓGICA DE AUTO-HEALING (CORREÇÃO: TOLERÂNCIA COM FILA)
     # ==============================================================================
     running_projects = Project.query.filter(
         Project.scan_status.in_(['Rodando', 'Na fila'])
@@ -49,45 +49,55 @@ def dashboard():
     
     if running_projects:
         try:
-            inspector = celery.control.inspect(timeout=0.2)
+            inspector = celery.control.inspect(timeout=1.0)
             active = inspector.active()    
             reserved = inspector.reserved() 
             scheduled = inspector.scheduled() 
             
-            workers_online = (active is not None)
-            real_task_ids = set()
-            
-            if workers_online:
+            if active is not None:
+                real_task_ids = set()
+                
+                # Coleta IDs de todas as filas visíveis nos workers
                 for w_tasks in [active, reserved, scheduled]:
                     if w_tasks:
                         for worker_name, tasks_list in w_tasks.items():
                             for t in tasks_list:
                                 real_task_ids.add(t['id'])
-            
-            changes = 0
-            for p in running_projects:
-                is_dead = False
-                if not workers_online:
-                    is_dead = True
-                elif p.current_task_id and p.current_task_id not in real_task_ids:
-                    if p.scan_status == 'Rodando':
-                        is_dead = True
-                elif not p.current_task_id:
-                    is_dead = True
                 
-                if is_dead:
-                    p.scan_status = 'Erro'
-                    p.scan_message = '🛑 Interrompido (Reinício ou Falha)'
-                    p.current_task_id = None
-                    changes += 1
-            
-            if changes > 0:
-                db.session.commit()
+                changes = 0
+                for p in running_projects:
+                    # --- ALTERAÇÃO IMPORTANTE AQUI ---
+                    # Só aplicamos a verificação rigorosa se o status for 'Rodando'.
+                    # Se for 'Na fila', deixamos quieto, pois pode estar no Redis (invisível pro inspector)
+                    # ou aguardando geração de ID pelo Scan Global.
+                    
+                    if p.scan_status == 'Rodando':
+                        # Se diz que está rodando, TEM que ter ID
+                        if not p.current_task_id:
+                            p.scan_status = 'Erro'
+                            p.scan_message = '🛑 Erro (Rodando sem ID)'
+                            changes += 1
+                        
+                        # Se tem ID, mas o worker não sabe dele -> Worker reiniciou ou task morreu
+                        elif p.current_task_id not in real_task_ids:
+                            p.scan_status = 'Erro'
+                            p.scan_message = '🛑 Processo perdido (Worker reiniciou?)'
+                            p.current_task_id = None
+                            changes += 1
+                    
+                    # Se estiver 'Na fila', NÃO FAZEMOS NADA. 
+                    # Assumimos que o Celery vai pegar eventualmente.
+
+                if changes > 0:
+                    db.session.commit()
+            else:
+                print("[AUTO-HEAL SKIP] Celery demorou para responder.")
+
         except Exception as e:
             print(f"[AUTO-HEAL ERROR] Falha ao inspecionar Celery: {e}")
 
     # ==============================================================================
-    # DADOS DO DASHBOARD
+    # DADOS DO DASHBOARD (Mantido igual)
     # ==============================================================================
     projects = Project.query.filter_by(user_id=current_user.id).all()
     
@@ -106,28 +116,25 @@ def dashboard():
         'running': running_scans
     }
 
-    # 2. Distribuição de Severidade (CORREÇÃO DE CASE SENSITIVE)
+    # 2. Distribuição de Severidade
     severity_query = db.session.query(Vulnerability.severity, func.count(Vulnerability.id))\
         .join(Domain).join(Project)\
         .filter(Project.user_id == current_user.id)\
         .group_by(Vulnerability.severity).all()
     
-    # Converte tudo para minúsculo
     sev_counts_lower = {}
     for s in severity_query:
-        if s[0]: # Garante que não é nulo
+        if s[0]: 
             key = str(s[0]).lower()
             val = s[1]
             sev_counts_lower[key] = sev_counts_lower.get(key, 0) + val
 
-    # Pega os valores normalizados
     crit = sev_counts_lower.get('critical', 0)
     high = sev_counts_lower.get('high', 0)
     med = sev_counts_lower.get('medium', 0)
     low = sev_counts_lower.get('low', 0)
     info = sev_counts_lower.get('info', 0)
     
-    # Recalcula total baseado apenas nessas categorias para a porcentagem
     total_for_pct = crit + high + med + low + info
     
     def calc_pct(count):
@@ -168,6 +175,7 @@ def add_project():
     
     discovery_enabled = True if request.form.get('auto_discovery') else False
     fuzzing_enabled = True if request.form.get('enable_fuzzing') else False
+    vuln_scan_enabled = True if request.form.get('enable_vuln_scan') else False
 
     if name and target_url:
         new_project = Project(
@@ -177,7 +185,8 @@ def add_project():
             in_scope=in_scope_raw,
             discovery_enabled=discovery_enabled,
             fuzzing_enabled=fuzzing_enabled,
-            user_id=current_user.id
+            user_id=current_user.id,
+            vuln_scan_enabled=vuln_scan_enabled,
         )
         new_project.scan_status = 'Na fila'
         new_project.scan_message = 'Aguardando início...'
@@ -287,6 +296,7 @@ def edit_project(id):
     
     discovery_enabled = True if request.form.get('auto_discovery') else False
     fuzzing_enabled = True if request.form.get('enable_fuzzing') else False
+    vuln_scan_enabled = True if request.form.get('enable_vuln_scan') else False
     
     if name and target_url:
         project.name = name
@@ -297,6 +307,7 @@ def edit_project(id):
         project.out_of_scope = out_of_scope_raw
         project.discovery_enabled = discovery_enabled
         project.fuzzing_enabled = fuzzing_enabled
+        project.vuln_scan_enabled = vuln_scan_enabled
         
         # 1. PROCESSA NOVOS DO IN_SCOPE
         added_count = 0
@@ -402,6 +413,13 @@ def project_card_part(id):
 def count_domains(id):
     project = Project.query.get_or_404(id)
     return str(len(project.domains))
+
+@main.route('/project/<int:id>/count_vulns')
+@login_required
+def count_vulns(id):
+    # Faz um Join para contar vulns apenas deste projeto
+    total = Vulnerability.query.join(Domain).filter(Domain.project_id == id).count()
+    return str(total)
 
 def parse_discord_search(query_str):
     # Estrutura de dados alterada para suportar grupos de AND dentro de OR
@@ -574,3 +592,80 @@ def project_search_options(id):
         'paths': sorted(list(path_set))[:50],
         'keys': ['status:', 'portas:', 'tech:', 'path:', 'subdominio:']
     })
+    
+    
+@main.route('/scan/global/start', methods=['POST'])
+@login_required
+def start_global_scan():
+    """Dispara o Scan Diário (Sua função existente no tasks.py)"""
+    
+    # 1. Muda status visualmente para 'Na fila' (feedback imediato)
+    # Isso faz o botão mudar de cor antes mesmo do Celery processar
+    projects = Project.query.filter_by(user_id=current_user.id).all()
+    count = 0
+    for p in projects:
+        if p.scan_status not in ['Rodando', 'Na fila']:
+            p.scan_status = 'Na fila'
+            p.scan_message = 'Aguardando Scan Diário...'
+            count += 1
+    db.session.commit()
+
+    # 2. Chama sua função original do tasks.py
+    if count > 0:
+        run_daily_scan.delay() 
+        flash('Scan Diário iniciado! As tarefas entrarão em execução em breve.', 'success')
+    else:
+        flash('Todos os projetos já estão em andamento.', 'info')
+
+    return redirect(url_for('main.dashboard'))
+
+@main.route('/scan/global/stop', methods=['POST'])
+@login_required
+def stop_global_scan():
+    """Para todos os scans rodando"""
+    projects = Project.query.filter(
+        Project.user_id == current_user.id,
+        Project.scan_status.in_(['Rodando', 'Na fila'])
+    ).all()
+    
+    stopped = 0
+    for p in projects:
+        # Tenta matar a task pelo ID salvo (graças ao passo 1)
+        if p.current_task_id:
+            try:
+                celery.control.revoke(p.current_task_id, terminate=True)
+            except: pass
+        
+        p.scan_status = 'Parado'
+        p.scan_message = '🛑 Parada Manual (Global)'
+        p.current_task_id = None
+        stopped += 1
+        
+    db.session.commit()
+    
+    if stopped > 0:
+        flash(f'{stopped} scans foram interrompidos.', 'warning')
+    
+    return redirect(url_for('main.dashboard'))
+
+@main.route('/htmx/stats')
+@login_required
+def htmx_stats():
+    # Recalcula as estatísticas (Cópia da lógica do dashboard)
+    total_projects = Project.query.filter_by(user_id=current_user.id).count()
+    total_subs = Domain.query.join(Project).filter(Project.user_id == current_user.id).count()
+    total_vulns = Vulnerability.query.join(Domain).join(Project).filter(Project.user_id == current_user.id).count()
+    running_scans = Project.query.filter(
+        Project.user_id == current_user.id, 
+        Project.scan_status.in_(['Rodando', 'Na fila'])
+    ).count()
+
+    stats = {
+        'projects': total_projects,
+        'subdomains': total_subs,
+        'vulns': total_vulns,
+        'running': running_scans
+    }
+    
+    # Retorna APENAS o pedacinho HTML dos cards
+    return render_template('partials/dashboard_status.html', stats=stats)

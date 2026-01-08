@@ -20,7 +20,7 @@ celery = Celery(__name__,
 celery.conf.beat_schedule = {
     'scan-all-daily': {
         'task': 'app.tasks.run_daily_scan',
-        'schedule': crontab(hour=3, minute=0), # Roda às 00:00 AM
+        'schedule': crontab(hour=3, minute=0), # Roda às 00:00 AM crontab(hour=3, minute=0)
     },
 }
 

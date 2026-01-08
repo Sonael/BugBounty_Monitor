@@ -1,7 +1,10 @@
+{# Lógica para calcular total de vulnerabilidades #}
+{% set all_vulns = project.domains | map(attribute='vulnerabilities') | sum(start=[]) %}
+
 {% for domain in project.domains %}
     {% for vuln in domain.vulnerabilities %}
     <tr class="align-middle">
-        <td class="text-center">
+        <td class="text-center bg-light">
             <span class="vuln-badge vuln-{{ vuln.severity }}">
                 {{ vuln.severity }}
             </span>
@@ -13,7 +16,7 @@
         
         <td>
             <div class="text-dark fw-bold mb-1">{{ vuln.name }}</div>
-            <div class="text-muted small" style="line-height: 1.4;">
+            <div class="text-muted small text-break" style="line-height: 1.4; max-width: 500px;">
                 {{ vuln.description }}
             </div>
         </td>
@@ -27,7 +30,8 @@
     {% endfor %}
 {% endfor %}
 
-{% if not project.domains|map(attribute='vulnerabilities')|sum(start=[]) %}
+{# Estado Vazio #}
+{% if not all_vulns %}
     <tr>
         <td colspan="4" class="text-center py-5">
             <div class="text-muted opacity-50">

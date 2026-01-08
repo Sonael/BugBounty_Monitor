@@ -1,0 +1,44 @@
+<div class="row mb-4" id="stats-container">
+    <div class="col-md-3 col-sm-6 mb-3 mb-md-0">
+        <div class="stat-card stat-primary d-flex align-items-center">
+            <div class="stat-icon"><i class="fas fa-cubes"></i></div>
+            <div>
+                <div class="stat-value">{{ stats.projects }}</div>
+                <div class="stat-label">Projetos Ativos</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3 col-sm-6 mb-3 mb-md-0">
+        <div class="stat-card stat-success d-flex align-items-center">
+            <div class="stat-icon"><i class="fas fa-globe"></i></div>
+            <div>
+                <div class="stat-value">{{ stats.subdomains }}</div>
+                <div class="stat-label">Subdomínios</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3 col-sm-6 mb-3 mb-md-0">
+        <div class="stat-card stat-danger d-flex align-items-center">
+            <div class="stat-icon"><i class="fas fa-bug"></i></div>
+            <div>
+                <div class="stat-value">{{ stats.vulns }}</div>
+                <div class="stat-label">Vulns Detectadas</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3 col-sm-6">
+        <div class="stat-card stat-warning d-flex align-items-center">
+            <div class="stat-icon">
+                {% if stats.running > 0 %}
+                    <i class="fas fa-sync-alt fa-spin"></i>
+                {% else %}
+                    <i class="fas fa-check-circle"></i>
+                {% endif %}
+            </div>
+            <div>
+                <div class="stat-value">{{ stats.running }}</div>
+                <div class="stat-label">Scans Rodando</div>
+            </div>
+        </div>
+    </div>
+</div>

@@ -25,6 +25,7 @@ def run_scan_task(self, project_id, mode='full'):
         try:
             print(f"[WORKER] Iniciando task para Projeto: {project.name} (Modo: {mode})")
             
+            project.current_task_id = self.request.id 
             project.scan_status = "Rodando"
             project.last_scan_date = datetime.utcnow()
             db.session.commit()
@@ -36,7 +37,7 @@ def run_scan_task(self, project_id, mode='full'):
             # FASE 1: RECON (Coleta + Portas + DNS + Status + FUZZING)
             # ==============================================================================
             if mode in ['recon', 'full', 'baseline']:
-                print("[WORKER] --- Iniciando Fase RECON ---")
+                print(f"[WORKER] --- Iniciando Fase RECON({mode}) ---")
                 
                 # --- 1. COLETA DE SUBDOMÍNIOS ---
                 found_subs = []
@@ -162,7 +163,8 @@ def run_scan_task(self, project_id, mode='full'):
                         is_new_entry = True
                     
                     if mode == 'baseline':
-                        domain_obj.scanned_vulns = True
+                        if not project.vuln_scan_enabled:
+                            domain_obj.scanned_vulns = True
 
                     val = status_map.get(sub)
                     code = int(val) if val is not None else 0
@@ -182,17 +184,15 @@ def run_scan_task(self, project_id, mode='full'):
                     # --- LÓGICA DE FUZZING OTIMIZADA ---
                     should_fuzz = False
                     
-                    # Só roda se o botão "Habilitar Fuzzing" estiver ligado no projeto
-                    if project.fuzzing_enabled:
+                    # REGRA 1: Modo Baseline
+                    if mode == 'baseline':
+                        if project.fuzzing_enabled:
+                            should_fuzz = True
                         
-                        # REGRA 1: Modo Baseline
-                        if mode == 'baseline':
-                            should_fuzz = True
-                            
                         # REGRA 2: Outros Modos (Recon/Full)
-                        elif is_new_entry:
+                    else:
+                        if is_new_entry:
                             should_fuzz = True
-                            
                         # REGRA 3: Scan Manual (Descoberta Off)
                         elif not project.discovery_enabled:
                             should_fuzz = True
@@ -263,7 +263,7 @@ def run_scan_task(self, project_id, mode='full'):
                     color = 0x00ff00 if new_count > 0 else 0x3498db
                     
                     send_discord_embed(
-                        title=f"📡 Recon: {project.name}",
+                        title=f"📡 {mode.upper()}: {project.name}",
                         description=f"Reconhecimento concluído. (Discovery: {'ON' if project.discovery_enabled else 'OFF'})",
                         fields=recon_fields,
                         color_hex=color
@@ -271,7 +271,13 @@ def run_scan_task(self, project_id, mode='full'):
                 except Exception as e:
                     print(f"[NOTIFY ERROR] Erro ao enviar Embed de Recon: {e}")
 
-                if mode in ['recon', 'baseline']:
+                should_stop = False
+                if mode == 'recon':
+                    should_stop = True
+                elif mode == 'baseline' and not project.vuln_scan_enabled:
+                    should_stop = True
+
+                if should_stop:
                     project.scan_status = "Concluído"
                     project.scan_message = f"Recon finalizado. {new_count} novos ativos."
                     db.session.commit()
@@ -280,18 +286,48 @@ def run_scan_task(self, project_id, mode='full'):
             # ==============================================================================
             # FASE 2: VULN SCAN (BATCH PROCESSING)
             # ==============================================================================
+            run_vuln_phase = False
             if mode in ['vuln', 'full']:
+                run_vuln_phase = True
+            elif mode == 'baseline' and project.vuln_scan_enabled:
+                print("[WORKER] Override: Rodando Vuln Scan no Baseline (Opção Ativada).")
+                run_vuln_phase = True
+            
+            
+            if run_vuln_phase:
                 print("[WORKER] --- Iniciando Fase VULN SCAN (Batch) ---")
                 
-                # Pega domínios que AINDA NÃO FORAM ESCANEADOS (scanned_vulns=False) e que estão vivos
-                targets = Domain.query.filter(
+                # 1. Cria a QUERY BASE (Sem .all() ainda)
+                # Isso cria um objeto de consulta, não a lista de resultados
+                query = Domain.query.filter(
                     Domain.project_id == project.id,
                     Domain.scanned_vulns == False,
                     Domain.status_code.in_([200, 201, 202, 204, 301, 302, 307, 308])
-                ).all()
+                )
+                
+                # 2. Aplica o filtro de DATA apenas se NÃO for Baseline
+                if mode != 'baseline':
+                    query = query.filter(Domain.first_seen >= project.last_scan_date)
+                
+                # 3. Agora sim executa a query final e pega a lista
+                targets = query.all()
                 
                 if not targets:
                     print("[WORKER] Nenhum alvo pendente com Status OK para Vuln Scan.")
+                    try:
+                        send_discord_embed(
+                            title=f"💤 Scan Vuln: {project.name}",
+                            description="Scan finalizado sem ações.",
+                            fields=[
+                                {"name": "Status", "value": "Nenhum alvo novo", "inline": True},
+                                {"name": "Detalhe", "value": "Todos os domínios ativos já foram verificados anteriormente.", "inline": False}
+                            ],
+                            color_hex=0x95a5a6 # Cinza (Info/Neutro)
+                        )
+                    except Exception as e:
+                        print(f"[NOTIFY ERROR] Erro ao enviar Embed: {e}")
+                    # ----------------------------------------
+
                     project.scan_status = "Concluído"
                     project.scan_message = "Nenhum alvo válido pendente."
                     db.session.commit()
@@ -429,8 +465,21 @@ def process_vulns(vuln_list, project_id):
 def run_daily_scan():
     from app import create_app
     from .models import Project
+    # Importante: Importar o db para salvar as alterações
+    from . import db 
+    
     app = create_app()
     with app.app_context():
         projects = Project.query.all()
         for proj in projects:
-            run_scan_task.delay(proj.id, mode='full')
+            # 1. Dispara a tarefa para a fila
+            task = run_scan_task.delay(proj.id, mode='full')
+            
+            # 2. SALVA O ID IMEDIATAMENTE (A Correção é Aqui)
+            # Isso garante que o botão "Parar" consiga encontrar e matar a tarefa na fila
+            proj.current_task_id = task.id
+            proj.scan_status = 'Na fila'
+            proj.scan_message = 'Aguardando início (Agendado)...'
+            
+            # Commit a cada iteração ou em grupos para garantir persistência rápida
+            db.session.commit()

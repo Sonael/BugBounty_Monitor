@@ -2,8 +2,8 @@
 
 {% block content %}
 
-{% set refresh_rate = 'every 10s' if project.scan_status in ['Rodando', 'Na fila'] else 'every 60s' %}
-
+{# Define a taxa de atualização baseado no status #}
+{% set refresh_rate = 'every 3s' if project.scan_status in ['Rodando', 'Na fila'] else 'every 60s' %}
 
 <div class="card border-0 shadow-sm mb-4">
     <div class="card-body p-4">
@@ -77,6 +77,17 @@
                 <button class="nav-link fw-bold border" id="vulns-tab" data-bs-toggle="pill" data-bs-target="#vulns"
                     type="button">
                     <i class="fas fa-bug me-2"></i>Vulnerabilidades
+                    
+                    {# Cálculo inicial para renderizar o número assim que a página abre #}
+                    {% set initial_vulns = project.domains | map(attribute='vulnerabilities') | sum(start=[]) | length %}
+                    
+                    {# Badge com HTMX para atualizar automaticamente #}
+                    <span class="badge bg-danger ms-2 rounded-pill"
+                        hx-get="{{ url_for('main.count_vulns', id=project.id) }}" 
+                        hx-trigger="{{ refresh_rate }}"
+                        hx-swap="innerHTML">
+                        {{ initial_vulns }}
+                    </span>
                 </button>
             </li>
 
@@ -97,8 +108,10 @@
                                 <th class="bg-light" style="width: 200px;">Local</th>
                             </tr>
                         </thead>
-                        <tbody id="vuln-table-body" hx-get="{{ url_for('main.project_vulns_part', id=project.id) }}"
-                            hx-trigger="{{ refresh_rate }}" hx-ext="morph" hx-swap="morph:innerHTML">
+                        <tbody id="vuln-table-body" 
+                               hx-get="{{ url_for('main.project_vulns_part', id=project.id) }}"
+                               hx-trigger="{{ refresh_rate }}" 
+                               hx-swap="innerHTML">
                             {% include 'partials/vulns_list.html' %}
                         </tbody>
                     </table>

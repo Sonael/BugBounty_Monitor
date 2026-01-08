@@ -14,6 +14,7 @@
     </div>
 
     <div class="d-flex align-items-center gap-3">
+
         <div class="d-none d-md-flex align-items-center">
             <div class="header-meta-badge text-muted">
                 <i class="fas fa-server text-success"></i>
@@ -35,6 +36,21 @@
             </div>
         </div>
 
+        {% if stats.running > 0 %}
+        <form action="{{ url_for('main.stop_global_scan') }}" method="POST" class="d-inline">
+            <button type="submit" class="btn btn-danger shadow-sm fw-bold px-3 py-2"
+                onclick="return confirm('Isso vai interromper todos os scans ativos. Continuar?');">
+                <i class="fas fa-stop-circle me-2"></i>Parar Scan Global
+            </button>
+        </form>
+        {% else %}
+        <form action="{{ url_for('main.start_global_scan') }}" method="POST" class="d-inline">
+            <button type="submit" class="btn btn-success shadow-sm fw-bold px-3 py-2">
+                <i class="fas fa-play-circle me-2"></i>Iniciar Scan Global
+            </button>
+        </form>
+        {% endif %}
+
         <button class="btn btn-primary shadow-sm fw-bold px-4 py-2" data-bs-toggle="modal"
             data-bs-target="#newProjectModal">
             <i class="fas fa-plus-circle me-2"></i>Novo Alvo
@@ -42,48 +58,12 @@
     </div>
 </div>
 
-<div class="row mb-4">
-    <div class="col-md-3 col-sm-6 mb-3 mb-md-0">
-        <div class="stat-card stat-primary d-flex align-items-center">
-            <div class="stat-icon"><i class="fas fa-cubes"></i></div>
-            <div>
-                <div class="stat-value">{{ stats.projects }}</div>
-                <div class="stat-label">Projetos Ativos</div>
-            </div>
-        </div>
-    </div>
-    <div class="col-md-3 col-sm-6 mb-3 mb-md-0">
-        <div class="stat-card stat-success d-flex align-items-center">
-            <div class="stat-icon"><i class="fas fa-globe"></i></div>
-            <div>
-                <div class="stat-value">{{ stats.subdomains }}</div>
-                <div class="stat-label">Subdomínios</div>
-            </div>
-        </div>
-    </div>
-    <div class="col-md-3 col-sm-6 mb-3 mb-md-0">
-        <div class="stat-card stat-danger d-flex align-items-center">
-            <div class="stat-icon"><i class="fas fa-bug"></i></div>
-            <div>
-                <div class="stat-value">{{ stats.vulns }}</div>
-                <div class="stat-label">Vulns Detectadas</div>
-            </div>
-        </div>
-    </div>
-    <div class="col-md-3 col-sm-6">
-        <div class="stat-card stat-warning d-flex align-items-center">
-            <div class="stat-icon">
-                {% if stats.running > 0 %}<i class="fas fa-sync-alt fa-spin"></i>{% else %}<i
-                    class="fas fa-check-circle"></i>{% endif %}
-            </div>
-            <div>
-                <div class="stat-value">{{ stats.running }}</div>
-                <div class="stat-label">Scans Rodando</div>
-            </div>
-        </div>
-    </div>
+<div hx-get="{{ url_for('main.htmx_stats') }}" 
+     hx-trigger="load, every 3s" 
+     hx-swap="innerHTML">
+     
+    {% include 'partials/dashboard_status.html' %}
 </div>
-
 <ul class="nav nav-tabs mb-4" id="dashboardTabs" role="tablist">
     <li class="nav-item" role="presentation">
         <button class="nav-link active" id="overview-tab" data-bs-toggle="tab" data-bs-target="#overview-pane"
@@ -199,8 +179,8 @@
                             {% endfor %}
                         </div>
                         {% else %}
-                        <div class="text-center py-3 text-muted opacity-50">
-                            <i class="fas fa-ghost fa-2x mb-2"></i>
+                        <div class="text-center py-5 text-muted opacity-50">
+                            <i class="fas fa-ghost fa-2x mb-2 mt-2"></i>
                             <p class="mb-0 small">Sem atividades.</p>
                         </div>
                         {% endif %}
@@ -252,11 +232,29 @@
                                     </div>
                                 </div>
 
-                                <div class="mb-4 p-3 bg-light rounded border">
+                                <div class="mb-3 p-3 bg-light rounded border">
                                     <div class="form-check form-switch">
                                         <input class="form-check-input" type="checkbox" name="enable_fuzzing" {% if
                                             project.fuzzing_enabled %}checked{% endif %}>
                                         <label class="form-check-label fw-bold">Habilitar Fuzzing (FFuf)</label>
+                                    </div>
+                                </div>
+
+                                <div class="mb-4 p-3 bg-light rounded border">
+                                    <div class="form-check form-switch">
+                                        <input class="form-check-input" type="checkbox" name="enable_vuln_scan" {% if
+                                            project.vuln_scan_enabled %}checked{% endif %}>
+                                        <label class="form-check-label fw-bold text-danger">Habilitar Scan de Vuln no
+                                            Baseline</label>
+                                    </div>
+                                    <div class="form-text small mt-2">
+                                        <i class="fas fa-radiation me-1"></i>
+                                        Se marcado, o sistema rodará <strong>Nuclei, XSS e SQLMap</strong> em todos os
+                                        domínios encontrados.
+                                        <span class="text-danger d-block mt-1">
+                                            <i class="fas fa-exclamation-circle me-1"></i> <strong>Atenção:</strong>
+                                            Isso tornará o scan inicial extremamente demorado.
+                                        </span>
                                     </div>
                                 </div>
 
@@ -268,8 +266,7 @@
                                         <textarea name="in_scope" class="form-control font-monospace small" rows="5"
                                             placeholder="Digite novos domínios aqui...">{{ project.in_scope or '' }}</textarea>
                                         <div class="form-text">Domínios digitados aqui serão
-                                            <strong>escaneados</strong>. <br> Não usar Wildcards(*).
-                                        </div>
+                                            <strong>escaneados</strong>. <br> Não usar Wildcards(*).</div>
                                     </div>
 
                                     <div class="col-md-6 mb-3">
@@ -404,6 +401,24 @@
                             </div>
                         </div>
 
+                        <div class="mb-4 p-3 bg-light rounded border">
+                            <div class="form-check form-switch">
+                                <input class="form-check-input" type="checkbox" id="vulnSwitch" name="enable_vuln_scan">
+                                <label class="form-check-label fw-bold" for="vulnSwitch">
+                                    Habilitar Scan de Vuln no Baseline
+                                </label>
+                            </div>
+                            <div class="form-text small mt-2">
+                                <i class="fas fa-radiation me-1"></i>
+                                Se marcado, o sistema rodará <strong>Nuclei, XSS e SQLMap</strong> em todos os domínios
+                                encontrados agora.
+                                <span class="text-danger d-block mt-1">
+                                    <i class="fas fa-exclamation-circle me-1"></i> Isso tornará o scan inicial
+                                    extremamente longo.
+                                </span>
+                            </div>
+                        </div>
+
                         <div class="row">
                             <div class="col-md-6 mb-3">
                                 <label class="form-label fw-bold text-success">
@@ -483,5 +498,27 @@
             setInterval(updateCountdown, 1000);
             updateCountdown();
         });
+        document.addEventListener("DOMContentLoaded", function() {
+        // 1. Tenta recuperar a última aba acessada
+        const lastTab = localStorage.getItem('activeDashboardTab');
+        
+        if (lastTab) {
+            // Se existir memória, clica na aba para ativá-la
+            const tabButton = document.querySelector(`#${lastTab}`);
+            if (tabButton) {
+                const tab = new bootstrap.Tab(tabButton);
+                tab.show();
+            }
+        }
+
+        // 2. Adiciona ouvinte para salvar sempre que o usuário trocar de aba
+        const tabButtons = document.querySelectorAll('button[data-bs-toggle="tab"]');
+        tabButtons.forEach(btn => {
+            btn.addEventListener('shown.bs.tab', function (event) {
+                // Salva o ID do botão clicado (ex: 'projects-tab')
+                localStorage.setItem('activeDashboardTab', event.target.id);
+            });
+        });
+    });
     </script>
     {% endblock %}

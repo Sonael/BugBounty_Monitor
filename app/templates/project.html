@@ -77,14 +77,14 @@
                 <button class="nav-link fw-bold border" id="vulns-tab" data-bs-toggle="pill" data-bs-target="#vulns"
                     type="button">
                     <i class="fas fa-bug me-2"></i>Vulnerabilidades
-                    
+
                     {# Cálculo inicial para renderizar o número assim que a página abre #}
-                    {% set initial_vulns = project.domains | map(attribute='vulnerabilities') | sum(start=[]) | length %}
-                    
+                    {% set initial_vulns = project.domains | map(attribute='vulnerabilities') | sum(start=[]) | length
+                    %}
+
                     {# Badge com HTMX para atualizar automaticamente #}
                     <span class="badge bg-danger ms-2 rounded-pill"
-                        hx-get="{{ url_for('main.count_vulns', id=project.id) }}" 
-                        hx-trigger="{{ refresh_rate }}"
+                        hx-get="{{ url_for('main.count_vulns', id=project.id) }}" hx-trigger="{{ refresh_rate }}"
                         hx-swap="innerHTML">
                         {{ initial_vulns }}
                     </span>
@@ -108,10 +108,8 @@
                                 <th class="bg-light" style="width: 200px;">Local</th>
                             </tr>
                         </thead>
-                        <tbody id="vuln-table-body" 
-                               hx-get="{{ url_for('main.project_vulns_part', id=project.id) }}"
-                               hx-trigger="{{ refresh_rate }}" 
-                               hx-swap="innerHTML">
+                        <tbody id="vuln-table-body" hx-get="{{ url_for('main.project_vulns_part', id=project.id) }}"
+                            hx-trigger="{{ refresh_rate }}" hx-swap="innerHTML">
                             {% include 'partials/vulns_list.html' %}
                         </tbody>
                     </table>
@@ -122,6 +120,23 @@
 
                 <div class="mb-4 position-relative">
                     <div class="input-group shadow-sm">
+                        <button class="btn btn-outline-secondary border-end-0 bg-white" type="button"
+                            data-bs-toggle="dropdown">
+                            <i class="far fa-calendar-alt text-primary"></i>
+                        </button>
+                        <ul class="dropdown-menu shadow border-0">
+                            <li>
+                                <h6 class="dropdown-header">Filtrar por Data</h6>
+                            </li>
+                            <li><a class="dropdown-item" href="#" onclick="openCalendar('date')">📅 Descoberto em...</a>
+                            </li>
+                            <li><a class="dropdown-item" href="#" onclick="openCalendar('ssl')">🔒 Data SSL...</a></li>
+                        </ul>
+                        {# Inputs ocultos para o Flatpickr anexar #}
+                        <input type="text" id="flatpickr-date" style="display:none;">
+                        <input type="text" id="flatpickr-ssl" style="display:none;">
+                        {# ------------------------------------------- #}
+
                         <span class="input-group-text bg-white border-end-0"><i
                                 class="fas fa-search text-muted"></i></span>
 
@@ -308,18 +323,73 @@
 
         let activeFilters = [];
         let cachedOptions = null;
+        let dbDates = [];
+        let dbSsl = [];
         const icons = {
             'status:': '<i class="fas fa-server"></i>',
             'tech:': '<i class="fas fa-code"></i>',
             'portas:': '<i class="fas fa-ethernet"></i>',
             'path:': '<i class="fas fa-folder-open"></i>',
-            'subdominio:': '<i class="fas fa-globe"></i>'
+            'subdominio:': '<i class="fas fa-globe"></i>',
+            'date:': '<i class="far fa-calendar-check"></i>',
+            'ssl:': '<i class="fas fa-lock"></i>'
         };
 
+        const commonConfig = {
+            mode: "range",
+            dateFormat: "Y-m-d",
+            locale: "pt",
+            showMonths: 1,
+            theme: "airbnb",
+            disableMobile: "true",
+            
+            onDayCreate: function(dObj, dStr, fp, dayElem) {
+                // Formata a data do calendário para comparar com a lista (YYYY-MM-DD)
+                // O timezone offset previne problemas de fuso horário na formatação
+                const date = fp.formatDate(dayElem.dateObj, "Y-m-d");
+                
+                // Define qual lista olhar (Descoberta ou SSL)
+                const targetList = (fp.element.id === 'flatpickr-date') ? dbDates : dbSsl;
+                
+                // Se a data existe na lista, adiciona a classe CSS especial
+                if (targetList.includes(date)) {
+                    dayElem.classList.add('has-data');
+                    dayElem.title = "Possui dados registrados"; // Tooltip simples
+                }
+            },
+
+            onClose: function(selectedDates, dateStr, instance) {
+                if (dateStr) {
+                    let prefix = instance.element.id === 'flatpickr-date' ? 'date:' : 'ssl:';
+                    addChip(prefix + dateStr);
+                    triggerSearch();
+                }
+            }
+        };
+
+        const fpDate = flatpickr("#flatpickr-date", commonConfig);
+        const fpSsl = flatpickr("#flatpickr-ssl", commonConfig);
+
+        window.openCalendar = function (type) {
+            if (type === 'date') fpDate.open();
+            else fpSsl.open();
+        }
+
         if (input) {
+            // Busca os dados da API
             fetch(`/api/project/${projectId}/search_options`)
                 .then(r => r.json())
-                .then(data => { cachedOptions = data; })
+                .then(data => { 
+                    cachedOptions = data; 
+                    
+                    // Salva as datas nas variáveis globais
+                    if (data.dates) dbDates = data.dates;
+                    if (data.ssl_dates) dbSsl = data.ssl_dates;
+                    
+                    // Força o calendário a redesenhar para aplicar as cores (onDayCreate rodará novamente)
+                    fpDate.redraw();
+                    fpSsl.redraw();
+                })
                 .catch(console.error);
 
             function updateSuggestions() {
@@ -431,6 +501,13 @@
             function addChip(text) {
                 let cleanText = text.trim();
                 if (cleanText.endsWith(',')) cleanText = cleanText.slice(0, -1);
+
+                // Evita duplicatas do mesmo filtro de data (remove anteriores se houver)
+                if (cleanText.startsWith('date:') || cleanText.startsWith('ssl:')) {
+                    const prefix = cleanText.split(':')[0] + ':';
+                    activeFilters = activeFilters.filter(f => !f.startsWith(prefix));
+                }
+
                 activeFilters.push(cleanText);
                 renderChips();
             }
@@ -453,7 +530,10 @@
                     let displayHTML = filter;
                     if (filter.includes(':')) {
                         const [k, v] = filter.split(':');
-                        const formattedVal = v.replace(/,/g, ', ');
+                        // Formatação visual para Range de Datas
+                        let formattedVal = v.replace(/,/g, ', ');
+                        if (v.includes(' to ')) formattedVal = v.replace(' to ', ' ➝ ');
+
                         displayHTML = `<span class="chip-key">${k}:</span><span class="chip-val">${formattedVal}</span>`;
                     }
                     return `

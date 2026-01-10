@@ -7,6 +7,7 @@ from .tasks import run_scan_task, run_daily_scan
 import os
 from sqlalchemy import or_, and_, func
 import fnmatch
+from datetime import datetime, timedelta
 
 
 main = Blueprint('main', __name__)
@@ -428,17 +429,23 @@ def parse_discord_search(query_str):
         'portas': [], # Lista de listas (Grupos AND)
         'tech': [],   # Lista de listas (Grupos AND)
         'path': [],   # Lista de listas (Grupos AND)
-        'sub': [],    # OR
+        'sub': [],
+        'date': [],   # NOVO: Filtro de Descoberta (First Seen)
+        'ssl': [],# OR
         'general': []
     }
     
     if not query_str: return filters
+    
+    safe_query = query_str.replace(" to ", "__TO__").replace(" até ", "__TO__")
         
-    parts = query_str.split(' ')
+    parts = safe_query.split(' ')
     
     for part in parts:
         part = part.strip()
         if not part: continue
+        
+        part = part.replace("__TO__", " to ")
         
         # Remove vírgula final se sobrar
         if part.endswith(','): part = part[:-1]
@@ -453,16 +460,22 @@ def parse_discord_search(query_str):
             if key in ['paths']: key = 'path'
             if key in ['subdominio', 'domain']: key = 'sub'
             
+            if key in ['date', 'data', 'seen']: key = 'date'
+            if key in ['ssl', 'cert']: key = 'ssl'
+            
             if key in filters:
-                # Para status, mesclamos tudo numa lista só (OR)
-                if key == 'status' or key == 'sub':
+                # Para status e sub, OR
+                if key in ['status', 'sub']:
                     if ',' in value:
                         filters[key].extend([v.strip() for v in value.split(',') if v.strip()])
                     else:
                         filters[key].append(value.strip())
                 
-                # Para Tech, Portas e Path, criamos GRUPOS
-                # 'tech:A,B' vira ['A', 'B'] (Isso será um AND)
+                # Para Datas, apenas adicionamos a string crua (ex: "2023-01-01 to 2023-01-05")
+                elif key in ['date', 'ssl']:
+                     filters[key].append(value.strip())
+
+                # Para Tech, Portas e Path, GRUPOS (AND)
                 else:
                     if ',' in value:
                         group = [v.strip() for v in value.split(',') if v.strip()]
@@ -524,6 +537,36 @@ def project_domains_part(id):
         if filters['sub']:
             conds = [Domain.name.ilike(f"%{s}%") for s in filters['sub']]
             query = query.filter(or_(*conds))
+        
+        if filters['date']:
+            # Pega o último filtro de data adicionado (ignora se user digitou varios)
+            date_str = filters['date'][-1] 
+            
+            try:
+                if ' to ' in date_str:
+                    # RANGE: YYYY-MM-DD to YYYY-MM-DD
+                    start_str, end_str = date_str.split(' to ')
+                    start_dt = datetime.strptime(start_str, '%Y-%m-%d')
+                    # Ajusta fim para o final do dia (23:59:59)
+                    end_dt = datetime.strptime(end_str, '%Y-%m-%d').replace(hour=23, minute=59, second=59)
+                    
+                    query = query.filter(Domain.first_seen.between(start_dt, end_dt))
+                else:
+                    start_dt = datetime.strptime(date_str, '%Y-%m-%d')
+                    end_dt = start_dt.replace(hour=23, minute=59, second=59)
+                    
+                    query = query.filter(Domain.first_seen.between(start_dt, end_dt))
+            except ValueError:
+                pass 
+
+        if filters['ssl']:
+            ssl_str = filters['ssl'][-1]
+                        
+            if ' to ' in ssl_str:
+                start_s, end_s = ssl_str.split(' to ')
+                query = query.filter(and_(Domain.creation_date >= start_s, Domain.creation_date <= end_s))
+            else:
+                query = query.filter(Domain.creation_date == ssl_str)
 
         # GERAL
         for term in filters['general']:
@@ -584,13 +627,22 @@ def project_search_options(id):
             for p in row.discovered_paths.split(','):
                 c = p.strip()
                 if c and not c.startswith('['): path_set.add(c)
+                
+                
+    dates_q = db.session.query(func.date(Domain.first_seen)).filter_by(project_id=id).distinct().all()
+    valid_dates = [str(r[0]) for r in dates_q if r[0]]
+                
+    ssl_q = db.session.query(Domain.creation_date).filter_by(project_id=id).distinct().all()
+    valid_ssl = [str(r[0]) for r in ssl_q if r[0]]
 
     return jsonify({
         'status': codes,
         'ports': unique_ports,
         'tech': sorted(list(tech_set))[:50],
         'paths': sorted(list(path_set))[:50],
-        'keys': ['status:', 'portas:', 'tech:', 'path:', 'subdominio:']
+        'dates': valid_dates,
+        'ssl_dates': valid_ssl,
+        'keys': ['status:', 'portas:', 'tech:', 'path:', 'subdominio:', 'date:', 'ssl:'],
     })
     
     

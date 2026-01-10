@@ -4,7 +4,7 @@ from .scanner import (
     find_subdomains, check_alive, scan_nuclei_bulk, 
     scan_crawling_xss_bulk, scan_sqlmap_bulk, 
     scan_naabu_bulk, run_dig_info, send_discord_embed,
-    scan_ffuf, scan_cmseek
+    scan_ffuf, scan_cmseek, get_first_seen_crtsh
 )
 from datetime import datetime
 import os
@@ -150,18 +150,18 @@ def run_scan_task(self, project_id, mode='full'):
                 new_count = 0
                 total_paths_found = 0 
 
-                project.scan_message = "4/4 Processando Alvos (DNS + Fuzzing)..."
+                project.scan_message = "4/4 Processando Alvos (DNS + Fuzzing + SSL Cert Data)..."
                 db.session.commit()
 
                 # --- 5. ATUALIZAÇÃO E FUZZING ---
                 for sub in found_subs:
                     domain_obj = domain_map.get(sub)
                     is_new_entry = False
-
+                    
                     if not domain_obj:
                         domain_obj = Domain(name=sub, project_id=project.id)
                         is_new_entry = True
-                    
+                        
                     if mode == 'baseline':
                         if not project.vuln_scan_enabled:
                             domain_obj.scanned_vulns = True
@@ -169,6 +169,12 @@ def run_scan_task(self, project_id, mode='full'):
                     val = status_map.get(sub)
                     code = int(val) if val is not None else 0
                     domain_obj.status_code = code
+                    
+                    if mode == 'recon' and is_new_entry and code in [200, 201, 202, 204, 301, 302, 307, 308]:
+                        # Pode ser um processo lento, então só roda quando necessário
+                        crt_date = get_first_seen_crtsh(sub)
+                        if crt_date:
+                            domain_obj.creation_date = crt_date
 
                     tech_list = tech_map.get(sub, [])
                     if tech_list:

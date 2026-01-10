@@ -5,6 +5,7 @@ import uuid
 import csv
 import urllib.request
 from datetime import datetime
+import requests
 
 # --- Função Utilitária de Comando com Debug ---
 def run_command(command, timeout=None):
@@ -534,3 +535,28 @@ def scan_ffuf(target_url):
         
     print(f"[SCANNER] FFuf encontrou {len(found_paths)} caminhos.")
     return found_paths
+
+def get_first_seen_crtsh(subdomain):
+    """
+    Consulta o crt.sh para descobrir a data do certificado mais antigo.
+    Retorna uma string data (YYYY-MM-DD) ou None.
+    """
+    print(f"[SCANNER] Buscando data de criação (SSL) para {subdomain}...")
+    try:
+        url = f"https://crt.sh/?q={subdomain}&output=json"
+        # Timeout curto para não travar o worker se o crt.sh estiver lento
+        r = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=30)
+        
+        if r.status_code == 200 and r.content:
+            data = r.json()
+            # Pega todas as datas 'not_before'
+            dates = [entry['not_before'] for entry in data]
+            dates.sort() 
+            
+            if dates:
+                print(f"[SCANNER] Data mais antiga encontrada para {subdomain}: {dates[0].split('T')[0]}")
+                return dates[0].split('T')[0]
+    except Exception as e:
+        print(f"[SCANNER WARN] Falha ao consultar crt.sh para {subdomain}: {e}")
+    
+    return None

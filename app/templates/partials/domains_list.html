@@ -1,8 +1,5 @@
-<div id="domains-list-container"
-     hx-get="{{ url_for('main.project_domains_part', id=project.id) }}"
-     hx-trigger="every 5s"
-     hx-include="[name='q'], [name='status']"
-     hx-swap="outerHTML">
+<div id="domains-list-container" hx-get="{{ url_for('main.project_domains_part', id=project.id) }}"
+    hx-trigger="every 5s" hx-include="[name='q'], [name='status']" hx-swap="outerHTML">
 
     <input type="hidden" name="status" value="{{ current_status or '' }}">
 
@@ -17,6 +14,8 @@
                     style="position: sticky; top: 0; background-color: #f8f9fa; z-index: 2;">Tecnologias</th>
                 <th class="border-0 text-secondary small fw-bold text-uppercase"
                     style="position: sticky; top: 0; background-color: #f8f9fa; z-index: 2;">PATHS (FFuf)</th>
+                <th class="border-0 text-secondary small fw-bold text-uppercase"
+                    style="position: sticky; top: 0; background-color: #f8f9fa; z-index: 2;">Data SSL</th>
                 <th class="border-0 text-secondary small fw-bold text-uppercase text-end pe-4"
                     style="position: sticky; top: 0; background-color: #f8f9fa; z-index: 2;">Descoberto</th>
             </tr>
@@ -53,147 +52,153 @@
 
                 <td class="text-center">
                     {% if domain.status_code %}
-                        {% if domain.status_code < 300 %} 
-                            <span class="badge bg-success bg-opacity-10 text-success border border-success">{{ domain.status_code }}</span>
-                        {% elif domain.status_code < 400 %} 
-                            <span class="badge bg-info bg-opacity-10 text-info border border-info">{{ domain.status_code }}</span>
-                        {% elif domain.status_code < 500 %} 
-                            <span class="badge bg-warning bg-opacity-10 text-warning border border-warning">{{ domain.status_code }}</span>
-                        {% else %}
-                            <span class="badge bg-danger bg-opacity-10 text-danger border border-danger">{{ domain.status_code }}</span>
-                        {% endif %}
-                    {% else %}
-                        <span class="badge bg-light text-muted border">-</span>
-                    {% endif %}
+                    {% if domain.status_code < 300 %} <span
+                        class="badge bg-success bg-opacity-10 text-success border border-success">{{ domain.status_code
+                        }}</span>
+                        {% elif domain.status_code < 400 %} <span
+                            class="badge bg-info bg-opacity-10 text-info border border-info">{{ domain.status_code
+                            }}</span>
+                            {% elif domain.status_code < 500 %} <span
+                                class="badge bg-warning bg-opacity-10 text-warning border border-warning">{{
+                                domain.status_code }}</span>
+                                {% else %}
+                                <span class="badge bg-danger bg-opacity-10 text-danger border border-danger">{{
+                                    domain.status_code }}</span>
+                                {% endif %}
+                                {% else %}
+                                <span class="badge bg-light text-muted border">-</span>
+                                {% endif %}
 
-                    {% if domain.open_ports %}
-                        {% set ports = domain.open_ports.split(',') %}
-                        <div class="mt-2 d-flex justify-content-center flex-wrap gap-1">
-                            {% if ports|length > 5 %}
-                                {% for p in ports[:5] %}
-                                    <span class="badge bg-primary bg-opacity-10 text-primary border border-primary fw-normal"
+                                {% if domain.open_ports %}
+                                {% set ports = domain.open_ports.split(',') %}
+                                <div class="mt-2 d-flex justify-content-center flex-wrap gap-1">
+                                    {% if ports|length > 5 %}
+                                    {% for p in ports[:5] %}
+                                    <span
+                                        class="badge bg-primary bg-opacity-10 text-primary border border-primary fw-normal"
                                         style="font-size: 0.7em;">:{{ p.strip() }}</span>
-                                {% endfor %}
-
-                                {% set pop_content %}
-                                    <div class='d-flex flex-wrap gap-1'>
-                                    {% for p in ports[5:] %}
-                                        <span class='badge bg-primary bg-opacity-10 text-primary border border-primary fw-normal'>:{{ p.strip() }}</span>
                                     {% endfor %}
-                                    </div>
-                                {% endset %}
 
-                                <a tabindex="0" class="badge bg-secondary text-decoration-none" 
-                                   style="font-size: 0.7em; cursor: pointer;"
-                                   role="button"
-                                   data-bs-toggle="popover"
-                                   data-bs-container="body"
-                                   data-bs-trigger="focus"
-                                   data-bs-html="true"
-                                   data-bs-placement="bottom"
-                                   title="Outras Portas"
-                                   data-bs-content="{{ pop_content|safe }}">
-                                    +{{ ports|length - 5 }}
-                                </a>
-                            {% else %}
-                                {% for p in ports %}
-                                    <span class="badge bg-primary bg-opacity-10 text-primary border border-primary fw-normal"
+                                    {% set pop_content %}
+                                    <div class='d-flex flex-wrap gap-1'>
+                                        {% for p in ports[5:] %}
+                                        <span
+                                            class='badge bg-primary bg-opacity-10 text-primary border border-primary fw-normal'>:{{
+                                            p.strip() }}</span>
+                                        {% endfor %}
+                                    </div>
+                                    {% endset %}
+
+                                    <a tabindex="0" class="badge bg-secondary text-decoration-none"
+                                        style="font-size: 0.7em; cursor: pointer;" role="button"
+                                        data-bs-toggle="popover" data-bs-container="body" data-bs-trigger="focus"
+                                        data-bs-html="true" data-bs-placement="bottom" title="Outras Portas"
+                                        data-bs-content="{{ pop_content|safe }}">
+                                        +{{ ports|length - 5 }}
+                                    </a>
+                                    {% else %}
+                                    {% for p in ports %}
+                                    <span
+                                        class="badge bg-primary bg-opacity-10 text-primary border border-primary fw-normal"
                                         style="font-size: 0.7em;">:{{ p.strip() }}</span>
-                                {% endfor %}
-                            {% endif %}
-                        </div>
-                    {% endif %}
+                                    {% endfor %}
+                                    {% endif %}
+                                </div>
+                                {% endif %}
                 </td>
 
                 <td>
                     {% if domain.technologies %}
-                        {% set techs = domain.technologies.split(', ') %}
-                        <div class="d-flex flex-wrap gap-1">
-                            {% if techs|length > 5 %}
-                                {% for tech in techs[:5] %}
-                                    <span class="badge border fw-normal text-dark bg-light" style="font-size: 0.75rem;">{{ tech }}</span>
-                                {% endfor %}
+                    {% set techs = domain.technologies.split(', ') %}
+                    <div class="d-flex flex-wrap gap-1">
+                        {% if techs|length > 5 %}
+                        {% for tech in techs[:5] %}
+                        <span class="badge border fw-normal text-dark bg-light" style="font-size: 0.75rem;">{{ tech
+                            }}</span>
+                        {% endfor %}
 
-                                {% set pop_tech %}
-                                    <div class='d-flex flex-wrap gap-1'>
-                                    {% for tech in techs[5:] %}
-                                        <span class='badge border fw-normal text-dark bg-light'>{{ tech }}</span>
-                                    {% endfor %}
-                                    </div>
-                                {% endset %}
-
-                                <a tabindex="0" class="badge bg-secondary text-decoration-none" 
-                                   style="font-size: 0.75rem; cursor: pointer;"
-                                   role="button"
-                                   data-bs-toggle="popover"
-                                   data-bs-container="body"
-                                   data-bs-trigger="focus"
-                                   data-bs-html="true"
-                                   data-bs-placement="bottom"
-                                   title="Outras as Tecnologias"
-                                   data-bs-content="{{ pop_tech|safe }}">
-                                    +{{ techs|length - 5 }}
-                                </a>
-                            {% else %}
-                                {% for tech in techs %}
-                                    <span class="badge border fw-normal text-dark bg-light" style="font-size: 0.75rem;">{{ tech }}</span>
-                                {% endfor %}
-                            {% endif %}
+                        {% set pop_tech %}
+                        <div class='d-flex flex-wrap gap-1'>
+                            {% for tech in techs[5:] %}
+                            <span class='badge border fw-normal text-dark bg-light'>{{ tech }}</span>
+                            {% endfor %}
                         </div>
+                        {% endset %}
+
+                        <a tabindex="0" class="badge bg-secondary text-decoration-none"
+                            style="font-size: 0.75rem; cursor: pointer;" role="button" data-bs-toggle="popover"
+                            data-bs-container="body" data-bs-trigger="focus" data-bs-html="true"
+                            data-bs-placement="bottom" title="Outras as Tecnologias"
+                            data-bs-content="{{ pop_tech|safe }}">
+                            +{{ techs|length - 5 }}
+                        </a>
+                        {% else %}
+                        {% for tech in techs %}
+                        <span class="badge border fw-normal text-dark bg-light" style="font-size: 0.75rem;">{{ tech
+                            }}</span>
+                        {% endfor %}
+                        {% endif %}
+                    </div>
                     {% else %}<span class="text-muted opacity-25 small">-</span>{% endif %}
                 </td>
 
                 <td style="max-width: 250px;">
                     {% if domain.discovered_paths %}
-                        {% set paths = domain.discovered_paths.split(',') %}
-                        <div class="d-flex flex-wrap gap-1">
-                            {% if paths|length > 5 %}
-                                {% for path in paths[:5] %}
-                                    <a href="http://{{ domain.name }}{{ path.strip() }}" target="_blank"
-                                        class="badge bg-secondary text-decoration-none" title="Abrir">
-                                        <i class="fas fa-external-link-alt me-1" style="font-size: 0.6em;"></i>{{ path.strip() }}
-                                    </a>
-                                {% endfor %}
+                    {% set paths = domain.discovered_paths.split(',') %}
+                    <div class="d-flex flex-wrap gap-1">
+                        {% if paths|length > 5 %}
+                        {% for path in paths[:5] %}
+                        <a href="http://{{ domain.name }}{{ path.strip() }}" target="_blank"
+                            class="badge bg-secondary text-decoration-none" title="Abrir">
+                            <i class="fas fa-external-link-alt me-1" style="font-size: 0.6em;"></i>{{ path.strip() }}
+                        </a>
+                        {% endfor %}
 
-                                {% set pop_paths %}
-                                    <div class='d-flex flex-wrap gap-1'>
-                                    {% for path in paths[5:] %}
-                                        <a href='http://{{ domain.name }}{{ path.strip() }}' target='_blank' class='badge bg-secondary text-decoration-none'><i class='fas fa-external-link-alt me-1' style='font-size: 0.6em;'></i>{{ path.strip() }}</a>
-                                    {% endfor %}
-                                    </div>
-                                {% endset %}
-
-                                <a tabindex="0" class="badge bg-secondary text-decoration-none" 
-                                   style="cursor: pointer;"
-                                   role="button"
-                                   data-bs-toggle="popover"
-                                   data-bs-container="body"
-                                   data-bs-trigger="focus"
-                                   data-bs-html="true"
-                                   data-bs-placement="left"
-                                   title="Outros Paths"
-                                   data-bs-content="{{ pop_paths|safe }}">
-                                    +{{ paths|length - 5 }}
-                                </a>
-                            {% else %}
-                                {% for path in paths %}
-                                    <a href="http://{{ domain.name }}{{ path.strip() }}" target="_blank"
-                                        class="badge bg-secondary text-decoration-none" title="Abrir">
-                                        <i class="fas fa-external-link-alt me-1" style="font-size: 0.6em;"></i>{{ path.strip() }}
-                                    </a>
-                                {% endfor %}
-                            {% endif %}
+                        {% set pop_paths %}
+                        <div class='d-flex flex-wrap gap-1'>
+                            {% for path in paths[5:] %}
+                            <a href='http://{{ domain.name }}{{ path.strip() }}' target='_blank'
+                                class='badge bg-secondary text-decoration-none'><i class='fas fa-external-link-alt me-1'
+                                    style='font-size: 0.6em;'></i>{{ path.strip() }}</a>
+                            {% endfor %}
                         </div>
+                        {% endset %}
+
+                        <a tabindex="0" class="badge bg-secondary text-decoration-none" style="cursor: pointer;"
+                            role="button" data-bs-toggle="popover" data-bs-container="body" data-bs-trigger="focus"
+                            data-bs-html="true" data-bs-placement="left" title="Outros Paths"
+                            data-bs-content="{{ pop_paths|safe }}">
+                            +{{ paths|length - 5 }}
+                        </a>
+                        {% else %}
+                        {% for path in paths %}
+                        <a href="http://{{ domain.name }}{{ path.strip() }}" target="_blank"
+                            class="badge bg-secondary text-decoration-none" title="Abrir">
+                            <i class="fas fa-external-link-alt me-1" style="font-size: 0.6em;"></i>{{ path.strip() }}
+                        </a>
+                        {% endfor %}
+                        {% endif %}
+                    </div>
                     {% else %}<span class="text-muted opacity-25 small">-</span>{% endif %}
+                </td>
+
+                <td class="text-center">
+                    {% if domain.creation_date %}
+                    <div class="badge bg-light text-dark border font-monospace" title="Data do certificado mais antigo">
+                        <i class="far fa-calendar-alt me-1 text-muted"></i>
+                        {{ domain.creation_date }}
+                    </div>
+                    {% else %}
+                    <span class="text-muted opacity-25 small">-</span>
+                    {% endif %}
                 </td>
 
                 <td class="text-end pe-4 text-muted small">
                     {{ domain.first_seen.strftime('%d/%m %H:%M') }}
                 </td>
-            </tr>
-            {% else %}
+            </tr> {% else %}
             <tr>
-                <td colspan="5" class="text-center py-5 text-muted">
+                <td colspan="6" class="text-center py-5 text-muted">
                     <i class="fas fa-search fa-2x mb-3 opacity-25"></i>
                     <p class="mb-0">Nenhum resultado encontrado.</p>
                 </td>

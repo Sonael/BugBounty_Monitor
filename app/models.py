@@ -46,6 +46,7 @@ class Domain(db.Model):
     dns_info = db.Column(db.Text, nullable=True)
     ip_address = db.Column(db.String(50), nullable=True)
     discovered_paths = db.Column(db.Text, nullable=True)
+    creation_date = db.Column(db.String(50), nullable=True)
     
 
 class Vulnerability(db.Model):

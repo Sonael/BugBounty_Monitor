@@ -151,7 +151,7 @@ def scan_nuclei_bulk(targets_file):
     output_nuclei = f"nuclei_res_{uuid.uuid4().hex}.json"
     
     # Comando Nuclei Otimizado (Inclui 'exposure' para achar .git e 'misconfig')
-    cmd = f"nuclei -l {targets_file} -tags cve2023,cve2024,misconfig,exposure,tech,panel -s info,low,medium,high,critical -j -silent -timeout 2 -c 80 -o {output_nuclei}"
+    cmd = f"nuclei -l {targets_file} -tags cve2023,cve2024,misconfig,exposure,tech,panel -s low,medium,high,critical -j -silent -timeout 2 -c 80 -o {output_nuclei}"
     
     run_command(cmd, timeout=7200)
     

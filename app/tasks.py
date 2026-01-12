@@ -293,13 +293,23 @@ def run_scan_task(self, project_id, mode='full'):
             # FASE 2: VULN SCAN (BATCH PROCESSING)
             # ==============================================================================
             run_vuln_phase = False
-            if mode in ['vuln', 'full']:
-                run_vuln_phase = True
-            elif mode == 'baseline' and project.vuln_scan_enabled:
-                print("[WORKER] Override: Rodando Vuln Scan no Baseline (Opção Ativada).")
-                run_vuln_phase = True
-            
-            
+                        
+            if mode == 'baseline':
+                if project.vuln_scan_enabled:
+                    run_vuln_phase = True
+                else:
+                    print(f"[WORKER] SKIP: Vuln Scan desativado para Baseline no projeto {project.name}.")
+
+            elif mode in ['full', 'vuln']:
+                if mode == 'vuln':
+                    run_vuln_phase = True
+                elif mode == 'full':
+                    if project.vuln_scan_recon_enabled:
+                        run_vuln_phase = True
+                    else:
+                        print(f"[WORKER] SKIP: Vuln Scan desativado para Full/Recon no projeto {project.name}.")
+        
+
             if run_vuln_phase:
                 print("[WORKER] --- Iniciando Fase VULN SCAN (Batch) ---")
                 
@@ -468,7 +478,7 @@ def process_vulns(vuln_list, project_id):
     print(f"[WORKER PROCESSING] Salvas: {count_saved} | Duplicadas: {count_dupe}")
 
 @celery.task
-def run_daily_scan():
+def run_daily_scan(mode='full'):
     from app import create_app
     from .models import Project
     # Importante: Importar o db para salvar as alterações
@@ -479,7 +489,7 @@ def run_daily_scan():
         projects = Project.query.all()
         for proj in projects:
             # 1. Dispara a tarefa para a fila
-            task = run_scan_task.delay(proj.id, mode='full')
+            task = run_scan_task.delay(proj.id, mode=mode)
             
             # 2. SALVA O ID IMEDIATAMENTE (A Correção é Aqui)
             # Isso garante que o botão "Parar" consiga encontrar e matar a tarefa na fila

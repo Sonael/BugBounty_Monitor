@@ -37,69 +37,78 @@ def logout():
     flash('Você foi desconectado com sucesso.', 'info')
     return redirect(url_for('main.index'))
 
+@main.route('/api/heal_projects')
+@login_required
+def heal_projects_api():
+    """
+    API Assíncrona: Verifica o Celery e corrige status travados.
+    Retorna HTML formatado para o Header (Ícone + Texto).
+    """
+    running_projects = Project.query.filter(Project.scan_status == 'Rodando').all()
+    
+    # 1. STATUS OK (Rápido)
+    if not running_projects:
+        return '''
+            <i class="fas fa-server text-success me-2"></i>
+            <span>Sistema Online</span>
+        '''
+
+    changes = 0
+    try:
+        # 2. STATUS CHECK (Lento)
+        inspector = celery.control.inspect(timeout=1.0)
+        active = inspector.active()    
+        
+        # Celery Offline
+        if active is None:
+            return '''
+                <i class="fas fa-exclamation-triangle text-danger me-2"></i>
+                <span class="text-danger fw-bold">Worker Offline</span>
+            '''
+
+        real_task_ids = set()
+        for w_tasks in [active, inspector.reserved()]:
+            if w_tasks:
+                for _, tasks_list in w_tasks.items():
+                    for t in tasks_list:
+                        real_task_ids.add(t['id'])
+        
+        # 3. AUTO-HEALING
+        for p in running_projects:
+            if not p.current_task_id:
+                p.scan_status = 'Erro'
+                p.scan_message = '🛑 Erro (Sem ID)'
+                changes += 1
+            elif p.current_task_id not in real_task_ids:
+                p.scan_status = 'Erro'
+                p.scan_message = '🛑 Processo perdido'
+                p.current_task_id = None
+                changes += 1
+        
+        if changes > 0:
+            db.session.commit()
+            response = make_response('''
+                <i class="fas fa-band-aid text-warning me-2"></i>
+                <span>Auto-Healing Ativo</span>
+            ''')
+            response.headers['HX-Trigger'] = 'refreshProjects'
+            return response
+
+    except Exception as e:
+        print(f"[AUTO-HEAL ERROR] {e}")
+        return '''
+            <i class="fas fa-times-circle text-danger me-2"></i>
+            <span>Erro Monitor</span>
+        '''
+
+    return '''
+        <i class="fas fa-cog fa-spin text-primary me-2"></i>
+        <span>Processando...</span>
+    '''
 # --- DASHBOARD & PROJETOS ---
 @main.route('/dashboard')
 @login_required
 def dashboard():
-    # ==============================================================================
-    # LÓGICA DE AUTO-HEALING (CORREÇÃO: TOLERÂNCIA COM FILA)
-    # ==============================================================================
-    running_projects = Project.query.filter(
-        Project.scan_status.in_(['Rodando', 'Na fila'])
-    ).all()
-    
-    if running_projects:
-        try:
-            inspector = celery.control.inspect(timeout=1.0)
-            active = inspector.active()    
-            reserved = inspector.reserved() 
-            scheduled = inspector.scheduled() 
-            
-            if active is not None:
-                real_task_ids = set()
-                
-                # Coleta IDs de todas as filas visíveis nos workers
-                for w_tasks in [active, reserved, scheduled]:
-                    if w_tasks:
-                        for worker_name, tasks_list in w_tasks.items():
-                            for t in tasks_list:
-                                real_task_ids.add(t['id'])
-                
-                changes = 0
-                for p in running_projects:
-                    # --- ALTERAÇÃO IMPORTANTE AQUI ---
-                    # Só aplicamos a verificação rigorosa se o status for 'Rodando'.
-                    # Se for 'Na fila', deixamos quieto, pois pode estar no Redis (invisível pro inspector)
-                    # ou aguardando geração de ID pelo Scan Global.
-                    
-                    if p.scan_status == 'Rodando':
-                        # Se diz que está rodando, TEM que ter ID
-                        if not p.current_task_id:
-                            p.scan_status = 'Erro'
-                            p.scan_message = '🛑 Erro (Rodando sem ID)'
-                            changes += 1
-                        
-                        # Se tem ID, mas o worker não sabe dele -> Worker reiniciou ou task morreu
-                        elif p.current_task_id not in real_task_ids:
-                            p.scan_status = 'Erro'
-                            p.scan_message = '🛑 Processo perdido (Worker reiniciou?)'
-                            p.current_task_id = None
-                            changes += 1
-                    
-                    # Se estiver 'Na fila', NÃO FAZEMOS NADA. 
-                    # Assumimos que o Celery vai pegar eventualmente.
-
-                if changes > 0:
-                    db.session.commit()
-            else:
-                print("[AUTO-HEAL SKIP] Celery demorou para responder.")
-
-        except Exception as e:
-            print(f"[AUTO-HEAL ERROR] Falha ao inspecionar Celery: {e}")
-
-    # ==============================================================================
-    # DADOS DO DASHBOARD (Mantido igual)
-    # ==============================================================================
     projects = Project.query.filter_by(user_id=current_user.id).all()
     
     # 1. Estatísticas Globais
@@ -177,6 +186,7 @@ def add_project():
     discovery_enabled = True if request.form.get('auto_discovery') else False
     fuzzing_enabled = True if request.form.get('enable_fuzzing') else False
     vuln_scan_enabled = True if request.form.get('enable_vuln_scan') else False
+    vuln_scan_recon_enabled = True if request.form.get('enable_vuln_recon') else False
 
     if name and target_url:
         new_project = Project(
@@ -188,6 +198,7 @@ def add_project():
             fuzzing_enabled=fuzzing_enabled,
             user_id=current_user.id,
             vuln_scan_enabled=vuln_scan_enabled,
+            vuln_scan_recon_enabled=vuln_scan_recon_enabled,
         )
         new_project.scan_status = 'Na fila'
         new_project.scan_message = 'Aguardando início...'
@@ -298,6 +309,7 @@ def edit_project(id):
     discovery_enabled = True if request.form.get('auto_discovery') else False
     fuzzing_enabled = True if request.form.get('enable_fuzzing') else False
     vuln_scan_enabled = True if request.form.get('enable_vuln_scan') else False
+    vuln_scan_recon_enabled = True if request.form.get('enable_vuln_recon') else False
     
     if name and target_url:
         project.name = name
@@ -309,6 +321,7 @@ def edit_project(id):
         project.discovery_enabled = discovery_enabled
         project.fuzzing_enabled = fuzzing_enabled
         project.vuln_scan_enabled = vuln_scan_enabled
+        project.vuln_scan_recon_enabled = vuln_scan_recon_enabled
         
         # 1. PROCESSA NOVOS DO IN_SCOPE
         added_count = 0
@@ -664,7 +677,7 @@ def start_global_scan():
 
     # 2. Chama sua função original do tasks.py
     if count > 0:
-        run_daily_scan.delay() 
+        run_daily_scan.delay(mode='baseline')
         flash('Scan Diário iniciado! As tarefas entrarão em execução em breve.', 'success')
     else:
         flash('Todos os projetos já estão em andamento.', 'info')

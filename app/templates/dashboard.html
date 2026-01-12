@@ -16,9 +16,11 @@
     <div class="d-flex align-items-center gap-3">
 
         <div class="d-none d-md-flex align-items-center">
-            <div class="header-meta-badge text-muted">
-                <i class="fas fa-server text-success"></i>
-                <span>Sistema Online</span>
+            <div class="header-meta-badge text-muted" id="header-system-status"
+                hx-get="{{ url_for('main.heal_projects_api') }}" hx-trigger="load" hx-swap="innerHTML">
+
+                <i class="fas fa-circle-notch fa-spin text-muted me-2"></i>
+                <span class="small">Verificando...</span>
             </div>
         </div>
 
@@ -58,10 +60,8 @@
     </div>
 </div>
 
-<div hx-get="{{ url_for('main.htmx_stats') }}" 
-     hx-trigger="load, every 3s" 
-     hx-swap="innerHTML">
-     
+<div hx-get="{{ url_for('main.htmx_stats') }}" hx-trigger="load, every 3s" hx-swap="innerHTML">
+
     {% include 'partials/dashboard_status.html' %}
 </div>
 <ul class="nav nav-tabs mb-4" id="dashboardTabs" role="tablist">
@@ -234,9 +234,20 @@
 
                                 <div class="mb-3 p-3 bg-light rounded border">
                                     <div class="form-check form-switch">
+                                        <input class="form-check-input" type="checkbox" name="enable_vuln_recon" {% if
+                                            project.vuln_scan_recon_enabled %}checked{% endif %}>
+                                        <label class="form-check-label fw-bold text-danger">Habilitar Scan de Vuln no
+                                            Recon
+                                            (Full Scan)</label>
+                                    </div>
+                                </div>
+
+                                <div class="mb-3 p-3 bg-light rounded border">
+                                    <div class="form-check form-switch">
                                         <input class="form-check-input" type="checkbox" name="enable_fuzzing" {% if
                                             project.fuzzing_enabled %}checked{% endif %}>
-                                        <label class="form-check-label fw-bold">Habilitar Fuzzing (FFuf)</label>
+                                        <label class="form-check-label fw-bold text-warning">Habilitar Fuzzing (FFuf) no
+                                            baseline</label>
                                     </div>
                                 </div>
 
@@ -246,15 +257,6 @@
                                             project.vuln_scan_enabled %}checked{% endif %}>
                                         <label class="form-check-label fw-bold text-danger">Habilitar Scan de Vuln no
                                             Baseline</label>
-                                    </div>
-                                    <div class="form-text small mt-2">
-                                        <i class="fas fa-radiation me-1"></i>
-                                        Se marcado, o sistema rodará <strong>Nuclei, XSS e SQLMap</strong> em todos os
-                                        domínios encontrados.
-                                        <span class="text-danger d-block mt-1">
-                                            <i class="fas fa-exclamation-circle me-1"></i> <strong>Atenção:</strong>
-                                            Isso tornará o scan inicial extremamente demorado.
-                                        </span>
                                     </div>
                                 </div>
 
@@ -266,7 +268,8 @@
                                         <textarea name="in_scope" class="form-control font-monospace small" rows="5"
                                             placeholder="Digite novos domínios aqui...">{{ project.in_scope or '' }}</textarea>
                                         <div class="form-text">Domínios digitados aqui serão
-                                            <strong>escaneados</strong>. <br> Não usar Wildcards(*).</div>
+                                            <strong>escaneados</strong>. <br> Não usar Wildcards(*).
+                                        </div>
                                     </div>
 
                                     <div class="col-md-6 mb-3">
@@ -360,7 +363,7 @@
 
                         <hr class="my-4 text-muted">
 
-                        <div class="mb-3 p-3 bg-light rounded border">
+                        <div class="mb-3 p-3 bg-light rounded border border-success">
                             <div class="form-check form-switch">
                                 <input class="form-check-input" type="checkbox" id="autoDiscoverySwitch"
                                     name="auto_discovery" checked>
@@ -382,7 +385,25 @@
                             </div>
                         </div>
 
-                        <div class="mb-4 p-3 bg-light rounded border">
+                        <div class="mb-4 p-3 bg-white rounded border border-danger">
+                            <div class="form-check form-switch">
+                                <input class="form-check-input" type="checkbox" id="vulnReconSwitch"
+                                    name="enable_vuln_recon" checked>
+                                <label class="form-check-label fw-bold text-danger" for="vulnReconSwitch">
+                                    Scan de Vuln no Recon (Full Scan)
+                                </label>
+                            </div>
+                            <div class="form-text text-muted small mt-1">
+                                <i class="fas fa-biohazard me-1"></i>
+                                Se marcado, buscará falhas <strong>imediatamente</strong> após descobrir novos
+                                subdomínios.
+                                <br><span class="text-danger fw-bold"><i class="fas fa-exclamation-circle me-1"></i>
+                                    Caso a empresa não permita scan de vulnerabilidades com ferramentas, desative esta
+                                    opção.</span>
+                            </div>
+                        </div>
+
+                        <div class="mb-4 p-3 bg-light rounded border border-warning">
                             <div class="form-check form-switch">
                                 <input class="form-check-input" type="checkbox" id="fuzzingSwitch"
                                     name="enable_fuzzing">
@@ -395,13 +416,13 @@
                                 Se marcado, o sistema irá buscar diretórios ocultos (ex: /.git, /admin) logo na criação
                                 do
                                 projeto.
-                                <span class="text-warning d-block mt-1">
+                                <span class="text-warning d-block mt-1 fw-bold">
                                     <i class="fas fa-clock me-1"></i> Isso tornará a criação do projeto mais lenta.
                                 </span>
                             </div>
                         </div>
 
-                        <div class="mb-4 p-3 bg-light rounded border">
+                        <div class="mb-4 p-3 bg-light rounded border border-danger">
                             <div class="form-check form-switch">
                                 <input class="form-check-input" type="checkbox" id="vulnSwitch" name="enable_vuln_scan">
                                 <label class="form-check-label fw-bold" for="vulnSwitch">
@@ -411,8 +432,8 @@
                             <div class="form-text small mt-2">
                                 <i class="fas fa-radiation me-1"></i>
                                 Se marcado, o sistema rodará <strong>Nuclei, XSS e SQLMap</strong> em todos os domínios
-                                encontrados agora.
-                                <span class="text-danger d-block mt-1">
+                                encontrados agora no baseline.
+                                <span class="text-danger d-block mt-1 fw-bold">
                                     <i class="fas fa-exclamation-circle me-1"></i> Isso tornará o scan inicial
                                     extremamente longo.
                                 </span>
@@ -498,27 +519,27 @@
             setInterval(updateCountdown, 1000);
             updateCountdown();
         });
-        document.addEventListener("DOMContentLoaded", function() {
-        // 1. Tenta recuperar a última aba acessada
-        const lastTab = localStorage.getItem('activeDashboardTab');
-        
-        if (lastTab) {
-            // Se existir memória, clica na aba para ativá-la
-            const tabButton = document.querySelector(`#${lastTab}`);
-            if (tabButton) {
-                const tab = new bootstrap.Tab(tabButton);
-                tab.show();
-            }
-        }
+        document.addEventListener("DOMContentLoaded", function () {
+            // 1. Tenta recuperar a última aba acessada
+            const lastTab = localStorage.getItem('activeDashboardTab');
 
-        // 2. Adiciona ouvinte para salvar sempre que o usuário trocar de aba
-        const tabButtons = document.querySelectorAll('button[data-bs-toggle="tab"]');
-        tabButtons.forEach(btn => {
-            btn.addEventListener('shown.bs.tab', function (event) {
-                // Salva o ID do botão clicado (ex: 'projects-tab')
-                localStorage.setItem('activeDashboardTab', event.target.id);
+            if (lastTab) {
+                // Se existir memória, clica na aba para ativá-la
+                const tabButton = document.querySelector(`#${lastTab}`);
+                if (tabButton) {
+                    const tab = new bootstrap.Tab(tabButton);
+                    tab.show();
+                }
+            }
+
+            // 2. Adiciona ouvinte para salvar sempre que o usuário trocar de aba
+            const tabButtons = document.querySelectorAll('button[data-bs-toggle="tab"]');
+            tabButtons.forEach(btn => {
+                btn.addEventListener('shown.bs.tab', function (event) {
+                    // Salva o ID do botão clicado (ex: 'projects-tab')
+                    localStorage.setItem('activeDashboardTab', event.target.id);
+                });
             });
         });
-    });
     </script>
     {% endblock %}

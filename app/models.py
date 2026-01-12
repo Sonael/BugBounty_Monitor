@@ -30,6 +30,7 @@ class Project(db.Model):
     fuzzing_enabled = db.Column(db.Boolean, default=False)
     
     vuln_scan_enabled = db.Column(db.Boolean, default=False)
+    vuln_scan_recon_enabled = db.Column(db.Boolean, default=False)
 
 
 class Domain(db.Model):

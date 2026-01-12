@@ -231,19 +231,39 @@
                     </div>
                     <hr class="my-4 text-muted">
                     <div class="mb-3 p-3 bg-light rounded border">
-                        <div class="form-check form-switch">
-                            <input class="form-check-input" type="checkbox" name="auto_discovery" {% if
-                                project.discovery_enabled %}checked{% endif %}>
-                            <label class="form-check-label fw-bold">Habilitar Descoberta Automática</label>
-                        </div>
-                    </div>
-                    <div class="mb-4 p-3 bg-light rounded border">
-                        <div class="form-check form-switch">
-                            <input class="form-check-input" type="checkbox" name="enable_fuzzing" {% if
-                                project.fuzzing_enabled %}checked{% endif %}>
-                            <label class="form-check-label fw-bold">Habilitar Fuzzing (FFuf)</label>
-                        </div>
-                    </div>
+                                    <div class="form-check form-switch">
+                                        <input class="form-check-input" type="checkbox" name="auto_discovery" {% if
+                                            project.discovery_enabled %}checked{% endif %}>
+                                        <label class="form-check-label fw-bold">Habilitar Descoberta Automática</label>
+                                    </div>
+                                </div>
+
+                                <div class="mb-3 p-3 bg-light rounded border">
+                                    <div class="form-check form-switch">
+                                        <input class="form-check-input" type="checkbox" name="enable_vuln_recon" {% if
+                                            project.vuln_scan_recon_enabled %}checked{% endif %}>
+                                        <label class="form-check-label fw-bold text-danger">Habilitar Scan de Vuln no Recon
+                                            (Full Scan)</label>
+                                    </div>
+                                </div>
+
+                                <div class="mb-3 p-3 bg-light rounded border">
+                                    <div class="form-check form-switch">
+                                        <input class="form-check-input" type="checkbox" name="enable_fuzzing" {% if
+                                            project.fuzzing_enabled %}checked{% endif %}>
+                                        <label class="form-check-label fw-bold text-warning">Habilitar Fuzzing (FFuf) no baseline</label>
+                                    </div>
+                                </div>
+
+                                <div class="mb-4 p-3 bg-light rounded border">
+                                    <div class="form-check form-switch">
+                                        <input class="form-check-input" type="checkbox" name="enable_vuln_scan" {% if
+                                            project.vuln_scan_enabled %}checked{% endif %}>
+                                        <label class="form-check-label fw-bold text-danger">Habilitar Scan de Vuln no
+                                            Baseline</label>
+                                    </div>
+                                </div>
+                    
                     <div class="row">
                         <div class="col-md-6 mb-3">
                             <label class="form-label fw-bold text-success">

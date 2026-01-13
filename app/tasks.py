@@ -21,6 +21,14 @@ def run_scan_task(self, project_id, mode='full'):
         if not project: 
             print(f"[WORKER ERROR] Projeto ID {project_id} não encontrado!")
             return
+        
+        
+        # Verifica se o projeto está "Rodando" OU "Na fila"
+        # E se o ID salvo no banco é DIFERENTE do ID desta tarefa atual.
+        # Se for diferente, significa que esta tarefa é velha/duplicada.
+        if project.scan_status in ['Rodando', 'Na fila'] and project.current_task_id != self.request.id:
+            print(f"[WORKER] IGNORADO: Projeto {project.name} (Status: {project.scan_status}) tem Task ID {project.current_task_id}, mas esta task é {self.request.id}. Abortando.")
+            return "Duplicata ignorada"
 
         try:
             print(f"[WORKER] Iniciando task para Projeto: {project.name} (Modo: {mode})")
@@ -481,21 +489,37 @@ def process_vulns(vuln_list, project_id):
 def run_daily_scan(mode='full'):
     from app import create_app
     from .models import Project
-    # Importante: Importar o db para salvar as alterações
     from . import db 
     
     app = create_app()
     with app.app_context():
         projects = Project.query.all()
         for proj in projects:
-            # 1. Dispara a tarefa para a fila
+            
+            # 1. Se estiver RODANDO, nunca interrompa ou duplique.
+            if proj.scan_status == 'Rodando':
+                continue
+            
+            # 2. LÓGICA DE PROTEÇÃO INTELIGENTE:
+            # Se estiver 'Na fila' E já tiver um ID de tarefa (proj.current_task_id),
+            # significa que o Celery já recebeu esse trabalho. Então pulamos.
+            #
+            # Se estiver 'Na fila' mas o ID for None (que é o que o seu botão faz),
+            # o código vai passar direto por este IF e vai agendar a tarefa abaixo.
+            if proj.scan_status == 'Na fila' and proj.current_task_id:
+                print(f"[SCHEDULER] Pular {proj.name}: Já está agendado (ID: {proj.current_task_id}).")
+                continue
+            
+            # 3. Agendamento
+            print(f"[SCHEDULER] Agendando {proj.name}...")
+            
+            # Dispara a tarefa para o Redis
             task = run_scan_task.delay(proj.id, mode=mode)
             
-            # 2. SALVA O ID IMEDIATAMENTE (A Correção é Aqui)
-            # Isso garante que o botão "Parar" consiga encontrar e matar a tarefa na fila
+            # Atualiza o banco com o NOVO ID da tarefa real
             proj.current_task_id = task.id
             proj.scan_status = 'Na fila'
             proj.scan_message = 'Aguardando início (Agendado)...'
             
-            # Commit a cada iteração ou em grupos para garantir persistência rápida
+            # Salva imediatamente para evitar condições de corrida
             db.session.commit()

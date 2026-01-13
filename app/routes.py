@@ -662,32 +662,54 @@ def project_search_options(id):
 @main.route('/scan/global/start', methods=['POST'])
 @login_required
 def start_global_scan():
-    """Dispara o Scan Diário (Sua função existente no tasks.py)"""
+    """Dispara o Scan Diário com Feedback Visual"""
     
-    # 1. Muda status visualmente para 'Na fila' (feedback imediato)
-    # Isso faz o botão mudar de cor antes mesmo do Celery processar
-    projects = Project.query.filter_by(user_id=current_user.id).all()
-    count = 0
-    for p in projects:
-        if p.scan_status not in ['Rodando', 'Na fila']:
-            p.scan_status = 'Na fila'
-            p.scan_message = 'Aguardando Scan Diário...'
-            count += 1
-    db.session.commit()
+    # 1. Filtra projetos que NÃO estão rodando
+    projects = Project.query.filter(
+        Project.user_id == current_user.id,
+        Project.scan_status != 'Rodando'
+        # Nota: Removemos o filtro 'Na fila' daqui para permitir reiniciar 
+        # projetos que ficaram travados em 'Na fila' sem processar.
+    ).all()
 
-    # 2. Chama sua função original do tasks.py
-    if count > 0:
-        run_daily_scan.delay(mode='baseline')
-        flash('Scan Diário iniciado! As tarefas entrarão em execução em breve.', 'success')
+    count = 0
+    if projects:
+        for p in projects:
+            # Se já estiver na fila COM um ID válido, não mexe (já tem worker cuidando)
+            if p.scan_status == 'Na fila' and p.current_task_id:
+                continue
+                
+            p.scan_status = 'Na fila'
+            p.scan_message = 'Aguardando início...'
+            # --- O PULO DO GATO ---
+            # Limpamos o ID para que o tasks.py saiba que precisa agendar um novo
+            p.current_task_id = None 
+            count += 1
+        
+        db.session.commit()
+
+        if count > 0:
+            run_daily_scan.delay(mode='baseline')
+            flash(f'Scan solicitado para {count} projetos.', 'success')
+        else:
+            flash('Todos os projetos já estão em andamento.', 'info')
     else:
-        flash('Todos os projetos já estão em andamento.', 'info')
+        flash('Nenhum projeto elegível para scan.', 'warning')
 
     return redirect(url_for('main.dashboard'))
 
 @main.route('/scan/global/stop', methods=['POST'])
 @login_required
 def stop_global_scan():
-    """Para todos os scans rodando"""
+    """Para todos os scans rodando e limpa a fila de espera"""
+    
+    # Isso impede que tarefas 'Na fila' comecem a rodar assim que você mata as atuais.
+    try:
+        celery.control.purge()
+    except Exception as e:
+        print(f"[STOP GLOBAL] Erro ao limpar fila (purge): {e}")
+
+    # 2. Busca projetos que estão ativos (Rodando ou Na fila)
     projects = Project.query.filter(
         Project.user_id == current_user.id,
         Project.scan_status.in_(['Rodando', 'Na fila'])
@@ -695,12 +717,15 @@ def stop_global_scan():
     
     stopped = 0
     for p in projects:
-        # Tenta matar a task pelo ID salvo (graças ao passo 1)
+        # 3. Mata o processo ativo se houver ID de tarefa
         if p.current_task_id:
             try:
+                # terminate=True envia sinal para matar o processo do worker (ex: nuclei/subfinder)
                 celery.control.revoke(p.current_task_id, terminate=True)
-            except: pass
+            except Exception as e:
+                print(f"[STOP GLOBAL] Erro ao revogar task {p.current_task_id}: {e}")
         
+        # 4. Atualiza o banco de dados para refletir a parada
         p.scan_status = 'Parado'
         p.scan_message = '🛑 Parada Manual (Global)'
         p.current_task_id = None
@@ -709,7 +734,9 @@ def stop_global_scan():
     db.session.commit()
     
     if stopped > 0:
-        flash(f'{stopped} scans foram interrompidos.', 'warning')
+        flash(f'{stopped} scans foram interrompidos e a fila foi limpa.', 'warning')
+    else:
+        flash('Nenhum scan estava rodando no momento.', 'info')
     
     return redirect(url_for('main.dashboard'))
 

@@ -1,55 +1,72 @@
 {% set refresh_rate = 'every 3s' if project.scan_status in ['Rodando', 'Na fila'] else 'every 3s' %}
 
-<div class="card border-0 shadow-sm mb-4" id="status-card"
-     hx-get="{{ url_for('main.project_status_part', id=project.id) }}"
-     hx-trigger="{{ refresh_rate }}"
-     hx-swap="outerHTML">
+<article 
+    class="card border-0 shadow-sm mb-4" 
+    id="status-card"
+    hx-get="{{ url_for('main.project_status_part', id=project.id) }}"
+    hx-trigger="{{ refresh_rate }}"
+    hx-swap="outerHTML"
+    role="status"
+    aria-live="polite"
+    aria-label="Status do processo">
 
     <div class="card-body text-center p-4">
-        <h6 class="text-uppercase text-muted fw-bold small mb-3 letter-spacing-1">Status Atual do Processo</h6>
+        <h2 class="text-uppercase text-muted fw-bold small mb-3 letter-spacing-1 h6">
+            Status Atual do Processo
+        </h2>
         
         {% if project.scan_status == 'Rodando' %}
+            <!-- Running Status -->
             <div class="my-3">
-                <div class="spinner-grow text-primary mb-3" style="width: 3rem; height: 3rem;" role="status"></div>
-                <h4 class="text-primary fw-bold">{{ project.scan_message }}</h4>
-                <p class="text-muted small animate-pulse">
-                    <i class="fas fa-sync fa-spin me-1"></i> Atualizando logs em tempo real...
+                <div class="spinner-grow text-primary mb-3" style="width: 3rem; height: 3rem;" role="status" aria-hidden="true"></div>
+                <h3 class="text-primary fw-bold h4">{{ project.scan_message }}</h3>
+                <p class="text-muted small animate-pulse mb-0">
+                    <i class="fas fa-sync fa-spin me-1" aria-hidden="true"></i>
+                    Atualizando logs em tempo real...
                 </p>
             </div>
 
         {% elif project.scan_status == 'Na fila' %}
+            <!-- Queued Status -->
             <div class="my-3">
-                <div class="spinner-border text-secondary mb-3" style="width: 3rem; height: 3rem;" role="status"></div>
-                <h4 class="text-secondary fw-bold">Na Fila de Processamento</h4>
-                <p class="text-muted small animate-pulse">
-                    <i class="fas fa-hourglass-half me-1"></i> Aguardando worker disponível...
+                <div class="spinner-border text-secondary mb-3" style="width: 3rem; height: 3rem;" role="status" aria-hidden="true"></div>
+                <h3 class="text-secondary fw-bold h4">Na Fila de Processamento</h3>
+                <p class="text-muted small animate-pulse mb-0">
+                    <i class="fas fa-hourglass-half me-1" aria-hidden="true"></i>
+                    Aguardando worker disponível...
                 </p>
             </div>
         
         {% elif project.scan_status == 'Erro' %}
+            <!-- Error Status -->
             <div class="py-2">
-                <i class="fas fa-times-circle fa-3x text-danger mb-3"></i>
-                <h4 class="text-danger fw-bold">Falha na Execução</h4>
-                <p class="text-dark bg-danger bg-opacity-10 p-2 rounded border border-danger">
-                    {{ project.scan_message }}
-                </p>
+                <i class="fas fa-times-circle fa-3x text-danger mb-3" aria-hidden="true"></i>
+                <h3 class="text-danger fw-bold h4">Falha na Execução</h3>
+                <div class="text-dark bg-danger bg-opacity-10 p-3 rounded border border-danger mt-2">
+                    <p class="mb-0 small">{{ project.scan_message }}</p>
+                </div>
             </div>
         
         {% elif project.scan_status == 'Concluído' %}
+            <!-- Completed Status -->
             <div class="py-2">
-                <i class="fas fa-check-circle fa-3x text-success mb-3"></i>
-                <h4 class="text-success fw-bold">{{ project.scan_message }}</h4>
+                <i class="fas fa-check-circle fa-3x text-success mb-3" aria-hidden="true"></i>
+                <h3 class="text-success fw-bold h4">{{ project.scan_message }}</h3>
+                {% if project.last_scan_date %}
                 <p class="text-muted small mb-0">
-                    <i class="far fa-clock me-1"></i> Finalizado em: {{ project.last_scan_date.strftime('%d/%m/%Y às %H:%M') if project.last_scan_date else 'Agora' }}
+                    <i class="far fa-clock me-1" aria-hidden="true"></i>
+                    Finalizado em: <time datetime="{{ project.last_scan_date.isoformat() }}">{{ project.last_scan_date.strftime('%d/%m/%Y às %H:%M') }}</time>
                 </p>
+                {% endif %}
             </div>
 
         {% else %}
+            <!-- Idle Status -->
             <div class="py-2 opacity-50">
-                <i class="fas fa-power-off fa-3x mb-3 text-secondary"></i>
-                <h4 class="text-secondary">Aguardando Início</h4>
-                <small class="text-muted">Selecione uma ação no painel de controle.</small>
+                <i class="fas fa-power-off fa-3x mb-3 text-secondary" aria-hidden="true"></i>
+                <h3 class="text-secondary h4">Aguardando Início</h3>
+                <p class="text-muted small mb-0">Selecione uma ação no painel de controle.</p>
             </div>
         {% endif %}
     </div>
-</div>
+</article>

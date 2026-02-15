@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 main = Blueprint('main', __name__)
 
 # --- AUTENTICAÇÃO ---
-@main.route('/')
+@main.route('/', methods=['GET'])
 def index():
     if current_user.is_authenticated:
         return redirect(url_for('main.dashboard'))
@@ -681,7 +681,6 @@ def start_global_scan():
                 
             p.scan_status = 'Na fila'
             p.scan_message = 'Aguardando início...'
-            # --- O PULO DO GATO ---
             # Limpamos o ID para que o tasks.py saiba que precisa agendar um novo
             p.current_task_id = None 
             count += 1
@@ -689,7 +688,7 @@ def start_global_scan():
         db.session.commit()
 
         if count > 0:
-            run_daily_scan.delay(mode='baseline')
+            run_daily_scan.delay(mode='full')
             flash(f'Scan solicitado para {count} projetos.', 'success')
         else:
             flash('Todos os projetos já estão em andamento.', 'info')

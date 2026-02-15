@@ -6,10 +6,11 @@ from .scanner import (
     scan_naabu_bulk, run_dig_info, send_discord_embed,
     scan_ffuf, scan_cmseek, get_first_seen_crtsh
 )
-from datetime import datetime
+from datetime import datetime,date
 import os
 import traceback
 import fnmatch
+
 
 @celery.task(bind=True)
 def run_scan_task(self, project_id, mode='full'):
@@ -488,38 +489,53 @@ def process_vulns(vuln_list, project_id):
 @celery.task
 def run_daily_scan(mode='full'):
     from app import create_app
-    from .models import Project
-    from . import db 
-    
+    from .models import Project, SystemState
+    from . import db
+    from datetime import date
+
     app = create_app()
     with app.app_context():
+        today = date.today()
+
+        # --- LOCK DIÁRIO GLOBAL ---
+        state = SystemState.query.get(1)
+
+        if not state:
+            state = SystemState(id=1)
+            db.session.add(state)
+            db.session.commit()
+
+        # Se já rodou hoje, ignora qualquer replay do Celery Beat
+        if state.last_daily_scan == today:
+            print("🛑 [SCHEDULER] Scan diário já executado hoje. Ignorando.")
+            return
+
+        # Trava execução diária ANTES de qualquer agendamento
+        state.last_daily_scan = today
+        db.session.commit()
+
         projects = Project.query.all()
         for proj in projects:
-            
-            # 1. Se estiver RODANDO, nunca interrompa ou duplique.
+
+            # --- PROTEÇÃO 1: Status ---
             if proj.scan_status == 'Rodando':
                 continue
-            
-            # 2. LÓGICA DE PROTEÇÃO INTELIGENTE:
-            # Se estiver 'Na fila' E já tiver um ID de tarefa (proj.current_task_id),
-            # significa que o Celery já recebeu esse trabalho. Então pulamos.
-            #
-            # Se estiver 'Na fila' mas o ID for None (que é o que o seu botão faz),
-            # o código vai passar direto por este IF e vai agendar a tarefa abaixo.
+
+            # --- PROTEÇÃO 2: Fila ---
             if proj.scan_status == 'Na fila' and proj.current_task_id:
-                print(f"[SCHEDULER] Pular {proj.name}: Já está agendado (ID: {proj.current_task_id}).")
+                print(
+                    f"[SCHEDULER] Pular {proj.name}: "
+                    f"Já está agendado (ID: {proj.current_task_id})."
+                )
                 continue
-            
-            # 3. Agendamento
+
+            # --- AGENDAMENTO ---
             print(f"[SCHEDULER] Agendando {proj.name}...")
-            
-            # Dispara a tarefa para o Redis
+
             task = run_scan_task.delay(proj.id, mode=mode)
-            
-            # Atualiza o banco com o NOVO ID da tarefa real
+
             proj.current_task_id = task.id
             proj.scan_status = 'Na fila'
             proj.scan_message = 'Aguardando início (Agendado)...'
-            
-            # Salva imediatamente para evitar condições de corrida
+
             db.session.commit()

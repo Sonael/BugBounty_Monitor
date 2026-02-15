@@ -2,50 +2,66 @@
 
 {% block content %}
 
-{# Define a taxa de atualização baseado no status #}
 {% set refresh_rate = 'every 3s' if project.scan_status in ['Rodando', 'Na fila'] else 'every 60s' %}
 
-<div class="card border-0 shadow-sm mb-4">
+<!-- Project Header Card -->
+<article class="card border-0 shadow-sm mb-4">
     <div class="card-body p-4">
-        <div class="d-flex justify-content-between align-items-center mb-4">
-            <a href="{{ url_for('main.dashboard') }}" class="btn btn-outline-secondary btn-sm fw-bold shadow-sm">
-                <i class="fas fa-arrow-left me-2"></i>Voltar para Dashboard
+        <!-- Top Navigation -->
+        <nav class="d-flex justify-content-between align-items-center mb-4" aria-label="Navegação do projeto">
+            <a href="{{ url_for('main.dashboard') }}" 
+               class="btn btn-outline-secondary btn-sm fw-bold shadow-sm"
+               aria-label="Voltar para dashboard">
+                <i class="fas fa-arrow-left me-2" aria-hidden="true"></i>Voltar para Dashboard
             </a>
 
-            <div>
-                <button type="button" class="btn btn-outline-primary btn-sm fw-bold shadow-sm me-2"
-                    data-bs-toggle="modal" data-bs-target="#editModal">
-                    <i class="fas fa-edit me-2"></i>Editar
+            <div role="group" aria-label="Ações do projeto">
+                <button type="button" 
+                        class="btn btn-outline-primary btn-sm fw-bold shadow-sm me-2"
+                        data-bs-toggle="modal" 
+                        data-bs-target="#editModal"
+                        aria-label="Editar projeto">
+                    <i class="fas fa-edit me-2" aria-hidden="true"></i>Editar
                 </button>
-                <button type="button" class="btn btn-outline-danger btn-sm fw-bold shadow-sm" data-bs-toggle="modal"
-                    data-bs-target="#deleteModal">
-                    <i class="fas fa-trash-alt me-2"></i>Excluir
+                <button type="button" 
+                        class="btn btn-outline-danger btn-sm fw-bold shadow-sm" 
+                        data-bs-toggle="modal"
+                        data-bs-target="#deleteModal"
+                        aria-label="Excluir projeto">
+                    <i class="fas fa-trash-alt me-2" aria-hidden="true"></i>Excluir
                 </button>
             </div>
-        </div>
+        </nav>
 
+        <!-- Project Info & Controls -->
         <div class="row align-items-center">
+            <!-- Project Identity -->
             <div class="col-md-5">
-                <div class="d-flex align-items-center">
-                    <div class="project-header-icon me-3">
+                <header class="d-flex align-items-center">
+                    <div class="project-header-icon me-3" aria-hidden="true">
                         <i class="fas fa-layer-group"></i>
                     </div>
 
                     <div>
-                        <h2 class="fw-bold text-dark mb-1"
+                        <h1 class="fw-bold text-dark mb-1"
                             style="font-size: 1.75rem; letter-spacing: -0.5px; line-height: 1.2;">
                             {{ project.name }}
-                        </h2>
+                        </h1>
                         <div class="d-flex align-items-center">
-                            <a href="http://{{ project.target_url }}" target="_blank"
-                                class="badge bg-light text-secondary border text-decoration-none font-monospace py-2 px-2"
-                                title="Abrir Alvo">
-                                <i class="fas fa-globe me-2 text-primary"></i>{{ project.target_url }}
+                            <a href="http://{{ project.target_url }}" 
+                               target="_blank"
+                               rel="noopener noreferrer"
+                               class="badge bg-light text-secondary border text-decoration-none font-monospace py-2 px-2"
+                               title="Abrir alvo em nova aba"
+                               aria-label="Abrir {{ project.target_url }} em nova aba">
+                                <i class="fas fa-globe me-2 text-primary" aria-hidden="true"></i>{{ project.target_url }}
                             </a>
                         </div>
                     </div>
-                </div>
+                </header>
             </div>
+
+            <!-- Scan Controls -->
             <div class="col-md-7">
                 <div class="d-flex justify-content-end">
                     <div style="width: 100%; max-width: 500px;">
@@ -55,305 +71,462 @@
             </div>
         </div>
     </div>
-</div>
+</article>
 
+<!-- Status Card -->
 {% include 'partials/status_card.html' %}
 
-<div class="card border-0 shadow-sm">
-    <div class="card-header bg-white border-bottom-0 pt-4 px-4">
-        <ul class="nav nav-pills" id="projectTabs" role="tablist">
-            <li class="nav-item">
-                <button class="nav-link active fw-bold border" id="domains-tab" data-bs-toggle="pill"
-                    data-bs-target="#domains" type="button">
-                    <i class="fas fa-sitemap me-2"></i>Subdomínios
-                    <span class="badge bg-secondary ms-2 rounded-pill"
-                        hx-get="{{ url_for('main.count_domains', id=project.id) }}" hx-trigger="{{ refresh_rate }}"
-                        hx-swap="innerHTML">
-                        {{ stats.total }}
-                    </span>
-                </button>
-            </li>
-            <li class="nav-item me-2">
-                <button class="nav-link fw-bold border" id="vulns-tab" data-bs-toggle="pill" data-bs-target="#vulns"
-                    type="button">
-                    <i class="fas fa-bug me-2"></i>Vulnerabilidades
+<!-- Main Content Card -->
+<article class="card border-0 shadow-sm">
+    <header class="card-header bg-white border-bottom-0 pt-4 px-4">
+        <nav>
+            <ul class="nav nav-pills" id="projectTabs" role="tablist">
+                <!-- Subdomains Tab -->
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link active fw-bold border" 
+                            id="domains-tab" 
+                            data-bs-toggle="pill"
+                            data-bs-target="#domains" 
+                            type="button"
+                            role="tab"
+                            aria-controls="domains"
+                            aria-selected="true">
+                        <i class="fas fa-sitemap me-2" aria-hidden="true"></i>Subdomínios
+                        <span class="badge bg-secondary ms-2 rounded-pill"
+                              hx-get="{{ url_for('main.count_domains', id=project.id) }}" 
+                              hx-trigger="{{ refresh_rate }}"
+                              hx-swap="innerHTML"
+                              aria-live="polite">
+                            {{ stats.total }}
+                        </span>
+                    </button>
+                </li>
 
-                    {# Cálculo inicial para renderizar o número assim que a página abre #}
-                    {% set initial_vulns = project.domains | map(attribute='vulnerabilities') | sum(start=[]) | length
-                    %}
-
-                    {# Badge com HTMX para atualizar automaticamente #}
-                    <span class="badge bg-danger ms-2 rounded-pill"
-                        hx-get="{{ url_for('main.count_vulns', id=project.id) }}" hx-trigger="{{ refresh_rate }}"
-                        hx-swap="innerHTML">
-                        {{ initial_vulns }}
-                    </span>
-                </button>
-            </li>
-
-        </ul>
-    </div>
+                <!-- Vulnerabilities Tab -->
+                <li class="nav-item me-2" role="presentation">
+                    <button class="nav-link fw-bold border" 
+                            id="vulns-tab" 
+                            data-bs-toggle="pill" 
+                            data-bs-target="#vulns"
+                            type="button"
+                            role="tab"
+                            aria-controls="vulns"
+                            aria-selected="false">
+                        <i class="fas fa-bug me-2" aria-hidden="true"></i>Vulnerabilidades
+                        
+                        {% set initial_vulns = project.domains | map(attribute='vulnerabilities') | sum(start=[]) | length %}
+                        
+                        <span class="badge bg-danger ms-2 rounded-pill"
+                              hx-get="{{ url_for('main.count_vulns', id=project.id) }}" 
+                              hx-trigger="{{ refresh_rate }}"
+                              hx-swap="innerHTML"
+                              aria-live="polite">
+                            {{ initial_vulns }}
+                        </span>
+                    </button>
+                </li>
+            </ul>
+        </nav>
+    </header>
 
     <div class="card-body p-4">
         <div class="tab-content" id="projectTabsContent">
 
-            <div class="tab-pane fade show" id="vulns">
+            <!-- Vulnerabilities Tab Content -->
+            <div class="tab-pane fade show" 
+                 id="vulns" 
+                 role="tabpanel" 
+                 aria-labelledby="vulns-tab"
+                 tabindex="0">
                 <div class="table-responsive rounded border" style="max-height: 600px; overflow-y: auto;">
                     <table class="table table-custom table-hover align-middle mb-0">
                         <thead style="position: sticky; top: 0; z-index: 10;">
                             <tr>
-                                <th class="text-center bg-light" style="width: 100px;">Nível</th>
-                                <th class="bg-light" style="width: 120px;">Ferramenta</th>
-                                <th class="bg-light">Detalhes da Falha</th>
-                                <th class="bg-light" style="width: 200px;">Local</th>
+                                <th class="text-center bg-light" style="width: 100px;" scope="col">Nível</th>
+                                <th class="bg-light" style="width: 120px;" scope="col">Ferramenta</th>
+                                <th class="bg-light" scope="col">Detalhes da Falha</th>
+                                <th class="bg-light" style="width: 200px;" scope="col">Local</th>
                             </tr>
                         </thead>
-                        <tbody id="vuln-table-body" hx-get="{{ url_for('main.project_vulns_part', id=project.id) }}"
-                            hx-trigger="{{ refresh_rate }}" hx-swap="innerHTML">
+                        <tbody id="vuln-table-body" 
+                               hx-get="{{ url_for('main.project_vulns_part', id=project.id) }}"
+                               hx-trigger="{{ refresh_rate }}" 
+                               hx-swap="innerHTML">
                             {% include 'partials/vulns_list.html' %}
                         </tbody>
                     </table>
                 </div>
             </div>
 
-            <div class="tab-pane fade show active" id="domains">
+            <!-- Domains Tab Content -->
+            <div class="tab-pane fade show active" 
+                 id="domains" 
+                 role="tabpanel" 
+                 aria-labelledby="domains-tab"
+                 tabindex="0">
 
+                <!-- Search and Filter Bar -->
                 <div class="mb-4 position-relative">
                     <div class="input-group shadow-sm">
-                        <button class="btn btn-outline-secondary border-end-0 bg-white" type="button"
-                            data-bs-toggle="dropdown">
-                            <i class="far fa-calendar-alt text-primary"></i>
+                        <!-- Date Filter Dropdown -->
+                        <button class="btn btn-outline-secondary border-end-0 bg-white" 
+                                type="button"
+                                data-bs-toggle="dropdown"
+                                aria-label="Filtrar por data">
+                            <i class="far fa-calendar-alt text-primary" aria-hidden="true"></i>
                         </button>
                         <ul class="dropdown-menu shadow border-0">
+                            <li><h6 class="dropdown-header">Filtrar por Data</h6></li>
                             <li>
-                                <h6 class="dropdown-header">Filtrar por Data</h6>
+                                <a class="dropdown-item" href="#" onclick="openCalendar('date')">
+                                    📅 Descoberto em...
+                                </a>
                             </li>
-                            <li><a class="dropdown-item" href="#" onclick="openCalendar('date')">📅 Descoberto em...</a>
+                            <li>
+                                <a class="dropdown-item" href="#" onclick="openCalendar('ssl')">
+                                    🔒 Data SSL...
+                                </a>
                             </li>
-                            <li><a class="dropdown-item" href="#" onclick="openCalendar('ssl')">🔒 Data SSL...</a></li>
                         </ul>
-                        {# Inputs ocultos para o Flatpickr anexar #}
-                        <input type="text" id="flatpickr-date" style="display:none;">
-                        <input type="text" id="flatpickr-ssl" style="display:none;">
-                        {# ------------------------------------------- #}
 
-                        <span class="input-group-text bg-white border-end-0"><i
-                                class="fas fa-search text-muted"></i></span>
+                        <!-- Hidden Flatpickr Inputs -->
+                        <input type="text" id="flatpickr-date" style="display:none;" aria-hidden="true">
+                        <input type="text" id="flatpickr-ssl" style="display:none;" aria-hidden="true">
 
+                        <!-- Search Icon -->
+                        <span class="input-group-text bg-white border-end-0">
+                            <i class="fas fa-search text-muted" aria-hidden="true"></i>
+                        </span>
+
+                        <!-- Search Input with Chips -->
                         <div class="form-control discord-search-wrapper d-flex align-items-center flex-wrap ps-0 border-start-0"
-                            onclick="document.getElementById('discord-search-input').focus()">
+                             onclick="document.getElementById('discord-search-input').focus()">
 
                             <div id="search-chips-area" class="d-flex flex-wrap align-items-center"></div>
 
-                            <input type="text" id="discord-search-input" class="flex-grow-1"
-                                placeholder="Filtrar... (Ex: status:200)" autocomplete="off">
+                            <input type="text" 
+                                   id="discord-search-input" 
+                                   class="flex-grow-1"
+                                   placeholder="Filtrar... (Ex: status:200)" 
+                                   autocomplete="off"
+                                   aria-label="Campo de busca e filtros">
                         </div>
 
-                        <input type="hidden" id="real-search-value" name="q"
-                            hx-get="{{ url_for('main.project_domains_part', id=project.id) }}"
-                            hx-target="#domains-content" hx-indicator="#domains-skeleton" hx-trigger="search"
-                            hx-swap="innerHTML">
+                        <!-- Hidden Real Search Value -->
+                        <input type="hidden" 
+                               id="real-search-value" 
+                               name="q"
+                               hx-get="{{ url_for('main.project_domains_part', id=project.id) }}"
+                               hx-target="#domains-content" 
+                               hx-indicator="#domains-skeleton" 
+                               hx-trigger="search"
+                               hx-swap="innerHTML">
 
-                        <button class="btn btn-outline-secondary" type="button" onclick="clearSearch()">
-                            <i class="fas fa-times"></i>
+                        <!-- Clear Button -->
+                        <button class="btn btn-outline-secondary" 
+                                type="button" 
+                                onclick="clearSearch()"
+                                aria-label="Limpar busca">
+                            <i class="fas fa-times" aria-hidden="true"></i>
                         </button>
                     </div>
 
-                    <div id="search-suggestions" class="list-group position-absolute w-100 d-none"
-                        style="z-index: 1000; overflow-y: auto; max-height: 300px;">
+                    <!-- Search Suggestions Dropdown -->
+                    <div id="search-suggestions" 
+                         class="list-group position-absolute w-100 d-none"
+                         style="z-index: 1000; overflow-y: auto; max-height: 300px;"
+                         role="listbox">
                     </div>
                 </div>
 
-                <div id="domains-wrapper" class="table-responsive rounded border position-relative"
-                    style="max-height: 600px; overflow-y: auto;">
+                <!-- Domains Table -->
+                <div id="domains-wrapper" 
+                     class="table-responsive rounded border position-relative"
+                     style="max-height: 600px; overflow-y: auto;"
+                     role="region"
+                     aria-label="Tabela de subdomínios">
 
                     <div id="domains-content">
                         {% include 'partials/domains_list.html' %}
                     </div>
 
+                    <!-- Loading Skeleton -->
                     <div id="domains-skeleton"
-                        class="htmx-indicator position-absolute top-0 start-0 w-100 h-100 bg-white opacity-75 d-flex justify-content-center align-items-center">
-                        <div class="spinner-border text-primary" role="status" style="width: 3rem; height: 3rem;"></div>
+                         class="htmx-indicator position-absolute top-0 start-0 w-100 h-100 bg-white opacity-75 d-flex justify-content-center align-items-center"
+                         role="status"
+                         aria-live="polite">
+                        <div class="spinner-border text-primary" style="width: 3rem; height: 3rem;"></div>
                     </div>
                 </div>
-
             </div>
         </div>
     </div>
-</div>
+</article>
 
-<div class="modal fade" id="deleteModal" tabindex="-1">
+<!-- Delete Modal -->
+<div class="modal fade" 
+     id="deleteModal" 
+     tabindex="-1"
+     aria-labelledby="deleteModalLabel"
+     aria-hidden="true">
     <div class="modal-dialog">
         <div class="modal-content border-0 shadow-lg">
-            <div class="modal-header bg-danger text-white">
-                <h5 class="modal-title fw-bold"><i class="fas fa-exclamation-triangle me-2"></i>Zona de Perigo</h5>
-                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
-            </div>
+            <header class="modal-header bg-danger text-white">
+                <h2 class="modal-title fw-bold h5" id="deleteModalLabel">
+                    <i class="fas fa-exclamation-triangle me-2" aria-hidden="true"></i>Zona de Perigo
+                </h2>
+                <button type="button" 
+                        class="btn-close btn-close-white" 
+                        data-bs-dismiss="modal"
+                        aria-label="Fechar modal"></button>
+            </header>
             <div class="modal-body p-4">
-                <p class="mb-3">Você está prestes a excluir o projeto <strong>{{ project.name }}</strong>
-                    permanentemente.</p>
-                <div class="alert alert-danger bg-danger bg-opacity-10 border-danger text-danger">
+                <p class="mb-3">
+                    Você está prestes a excluir o projeto <strong>{{ project.name }}</strong> permanentemente.
+                </p>
+                <div class="alert alert-danger bg-danger bg-opacity-10 border-danger text-danger" role="alert">
                     <ul class="mb-0 small">
                         <li>Todos os subdomínios serão perdidos.</li>
                         <li>O histórico de vulnerabilidades será apagado.</li>
                     </ul>
                 </div>
             </div>
-            <div class="modal-footer bg-light">
+            <footer class="modal-footer bg-light">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
-                <form action="{{ url_for('main.delete_project', id=project.id) }}" method="POST">
+                <form action="{{ url_for('main.delete_project', id=project.id) }}" method="POST" class="d-inline">
                     <button type="submit" class="btn btn-danger fw-bold">Sim, Apagar Tudo</button>
                 </form>
-            </div>
+            </footer>
         </div>
     </div>
 </div>
 
-<div class="modal fade" id="editModal" tabindex="-1">
+<!-- Edit Modal -->
+<div class="modal fade" 
+     id="editModal" 
+     tabindex="-1"
+     aria-labelledby="editModalLabel"
+     aria-hidden="true">
     <div class="modal-dialog modal-lg">
         <form method="POST" action="{{ url_for('main.edit_project', id=project.id) }}">
             <div class="modal-content border-0 shadow-lg">
-                <div class="modal-header bg-primary text-white">
-                    <h5 class="modal-title fw-bold"><i class="fas fa-edit me-2"></i>Editar Projeto</h5>
-                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
-                </div>
+                <header class="modal-header bg-primary text-white">
+                    <h2 class="modal-title fw-bold h5" id="editModalLabel">
+                        <i class="fas fa-edit me-2" aria-hidden="true"></i>Editar Projeto
+                    </h2>
+                    <button type="button" 
+                            class="btn-close btn-close-white" 
+                            data-bs-dismiss="modal"
+                            aria-label="Fechar modal"></button>
+                </header>
                 <div class="modal-body p-4">
                     <div class="row">
                         <div class="col-md-6 mb-3">
-                            <label class="form-label fw-bold">Nome do Projeto</label>
-                            <input type="text" name="name" class="form-control" value="{{ project.name }}" required>
+                            <label for="edit_project_name" class="form-label fw-bold">Nome do Projeto</label>
+                            <input type="text" 
+                                   id="edit_project_name"
+                                   name="name" 
+                                   class="form-control" 
+                                   value="{{ project.name }}" 
+                                   required>
                         </div>
                         <div class="col-md-6 mb-3">
-                            <label class="form-label fw-bold">Domínio Principal</label>
-                            <input type="text" name="target_url" class="form-control" value="{{ project.target_url }}"
-                                required>
+                            <label for="edit_target_url" class="form-label fw-bold">Domínio Principal</label>
+                            <input type="text" 
+                                   id="edit_target_url"
+                                   name="target_url" 
+                                   class="form-control" 
+                                   value="{{ project.target_url }}"
+                                   required>
                         </div>
                     </div>
+
                     <hr class="my-4 text-muted">
+
+                    <!-- Auto Discovery Toggle -->
                     <div class="mb-3 p-3 bg-light rounded border">
-                                    <div class="form-check form-switch">
-                                        <input class="form-check-input" type="checkbox" name="auto_discovery" {% if
-                                            project.discovery_enabled %}checked{% endif %}>
-                                        <label class="form-check-label fw-bold">Habilitar Descoberta Automática</label>
-                                    </div>
-                                </div>
+                        <div class="form-check form-switch">
+                            <input class="form-check-input" 
+                                   type="checkbox" 
+                                   name="auto_discovery" 
+                                   {% if project.discovery_enabled %}checked{% endif %}>
+                            <label class="form-check-label fw-bold">Habilitar Descoberta Automática</label>
+                        </div>
+                    </div>
 
-                                <div class="mb-3 p-3 bg-light rounded border">
-                                    <div class="form-check form-switch">
-                                        <input class="form-check-input" type="checkbox" name="enable_vuln_recon" {% if
-                                            project.vuln_scan_recon_enabled %}checked{% endif %}>
-                                        <label class="form-check-label fw-bold text-danger">Habilitar Scan de Vuln no Recon
-                                            (Full Scan)</label>
-                                    </div>
-                                </div>
+                    <!-- Vuln Scan on Recon -->
+                    <div class="mb-3 p-3 bg-light rounded border">
+                        <div class="form-check form-switch">
+                            <input class="form-check-input" 
+                                   type="checkbox" 
+                                   name="enable_vuln_recon" 
+                                   {% if project.vuln_scan_recon_enabled %}checked{% endif %}>
+                            <label class="form-check-label fw-bold text-danger">Habilitar Scan de Vuln no Recon (Full Scan)</label>
+                        </div>
+                    </div>
 
-                                <div class="mb-3 p-3 bg-light rounded border">
-                                    <div class="form-check form-switch">
-                                        <input class="form-check-input" type="checkbox" name="enable_fuzzing" {% if
-                                            project.fuzzing_enabled %}checked{% endif %}>
-                                        <label class="form-check-label fw-bold text-warning">Habilitar Fuzzing (FFuf) no baseline</label>
-                                    </div>
-                                </div>
+                    <!-- Fuzzing Toggle -->
+                    <div class="mb-3 p-3 bg-light rounded border">
+                        <div class="form-check form-switch">
+                            <input class="form-check-input" 
+                                   type="checkbox" 
+                                   name="enable_fuzzing" 
+                                   {% if project.fuzzing_enabled %}checked{% endif %}>
+                            <label class="form-check-label fw-bold text-warning">Habilitar Fuzzing (FFuf) no baseline</label>
+                        </div>
+                    </div>
 
-                                <div class="mb-4 p-3 bg-light rounded border">
-                                    <div class="form-check form-switch">
-                                        <input class="form-check-input" type="checkbox" name="enable_vuln_scan" {% if
-                                            project.vuln_scan_enabled %}checked{% endif %}>
-                                        <label class="form-check-label fw-bold text-danger">Habilitar Scan de Vuln no
-                                            Baseline</label>
-                                    </div>
-                                </div>
-                    
+                    <!-- Vuln Scan on Baseline -->
+                    <div class="mb-4 p-3 bg-light rounded border">
+                        <div class="form-check form-switch">
+                            <input class="form-check-input" 
+                                   type="checkbox" 
+                                   name="enable_vuln_scan" 
+                                   {% if project.vuln_scan_enabled %}checked{% endif %}>
+                            <label class="form-check-label fw-bold text-danger">Habilitar Scan de Vuln no Baseline</label>
+                        </div>
+                    </div>
+
+                    <!-- Scope Configuration -->
                     <div class="row">
                         <div class="col-md-6 mb-3">
-                            <label class="form-label fw-bold text-success">
-                                <i class="fas fa-plus-circle me-1"></i> Adicionar ao Escopo
+                            <label for="edit_in_scope" class="form-label fw-bold text-success">
+                                <i class="fas fa-plus-circle me-1" aria-hidden="true"></i>
+                                Adicionar ao Escopo
                             </label>
-                            <textarea name="in_scope" class="form-control font-monospace small"
-                                rows="5">{{ project.in_scope or '' }}</textarea>
+                            <textarea id="edit_in_scope"
+                                      name="in_scope" 
+                                      class="form-control font-monospace small"
+                                      rows="5">{{ project.in_scope or '' }}</textarea>
                         </div>
                         <div class="col-md-6 mb-3">
-                            <label class="form-label fw-bold text-danger">
-                                <i class="fas fa-ban me-1"></i> Out of Scope
+                            <label for="edit_out_of_scope" class="form-label fw-bold text-danger">
+                                <i class="fas fa-ban me-1" aria-hidden="true"></i>
+                                Out of Scope
                             </label>
-                            <textarea name="out_of_scope" class="form-control font-monospace small"
-                                rows="5">{{ project.out_of_scope or '' }}</textarea>
+                            <textarea id="edit_out_of_scope"
+                                      name="out_of_scope" 
+                                      class="form-control font-monospace small"
+                                      rows="5">{{ project.out_of_scope or '' }}</textarea>
                         </div>
                     </div>
                 </div>
-                <div class="modal-footer bg-light">
+                <footer class="modal-footer bg-light">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
                     <button type="submit" class="btn btn-primary fw-bold px-4">Salvar Alterações</button>
-                </div>
+                </footer>
             </div>
         </form>
     </div>
 </div>
 
-<script>
-    // === 1. LÓGICA DE POPOVERS (Inicia fora do DOMContentLoaded para garantir acesso ao HTMX) ===
-    (function () {
-        function initPopovers(scope) {
-            // Se não passar escopo, usa o body inteiro (segurança)
-            scope = scope || document.body;
+{% endblock %}
 
-            // Encontra todos os elementos com popover dentro do escopo alterado
+{% block scripts %}
+<script>
+    // === POPOVER MANAGEMENT WITH POLLING CONTROL ===
+    (function () {
+        let savedScrollPosition = 0;
+        let pauseTimeout = null;
+        
+        window.pausePolling = false;
+
+        function pausePollingTemporarily(duration = 15000) {
+            window.pausePolling = true;
+            
+            if (pauseTimeout) {
+                clearTimeout(pauseTimeout);
+            }
+            
+            pauseTimeout = setTimeout(() => {
+                window.pausePolling = false;
+            }, duration);
+        }
+
+        function initPopovers(scope) {
+            scope = scope || document.body;
             var triggers = [].slice.call(scope.querySelectorAll('[data-bs-toggle="popover"]'));
 
-            // Verifica se o próprio elemento alterado é um popover (caso raro, mas possível)
             if (scope.matches && scope.matches('[data-bs-toggle="popover"]')) {
                 triggers.push(scope);
             }
 
             triggers.forEach(function (el) {
-                // Destrói instância antiga se existir (evita travamento)
                 var oldInstance = bootstrap.Popover.getInstance(el);
                 if (oldInstance) {
                     oldInstance.dispose();
                 }
 
-                // Cria nova instância
-                new bootstrap.Popover(el, {
-                    container: 'body',  // Faz o balão flutuar acima da tabela
-                    html: true,         // Permite HTML dentro (badges)
-                    trigger: 'focus',   // Fecha ao clicar fora
-                    sanitize: false     // Permite classes e cores do Bootstrap
+                var popoverInstance = new bootstrap.Popover(el, {
+                    container: 'body',
+                    html: true,
+                    trigger: 'focus',
+                    sanitize: false
+                });
+
+                el.addEventListener('shown.bs.popover', function () {
+                    pausePollingTemporarily(15000);
                 });
             });
         }
 
-        // A) Inicializa assim que a página carrega
         document.addEventListener("DOMContentLoaded", function () {
             initPopovers(document.body);
+            
+            const tableWrapper = document.querySelector('#domains-wrapper');
+            if (tableWrapper) {
+                let scrollTimeout;
+                
+                tableWrapper.addEventListener('scroll', function() {
+                    pausePollingTemporarily(8000);
+                    
+                    clearTimeout(scrollTimeout);
+                    scrollTimeout = setTimeout(() => {}, 1000);
+                });
+                
+                tableWrapper.addEventListener('mouseenter', function() {
+                    pausePollingTemporarily(10000);
+                });
+            }
         });
 
-        // B) Inicializa sempre que o HTMX terminar de trocar o conteúdo (Filtros/Paginação)
+        document.body.addEventListener('htmx:beforeSwap', function (evt) {
+            if (evt.detail.target && evt.detail.target.id === 'domains-table-content') {
+                const scrollContainer = document.querySelector('#domains-wrapper');
+                if (scrollContainer) {
+                    savedScrollPosition = scrollContainer.scrollTop;
+                }
+                
+                const openPopovers = document.querySelectorAll('.popover');
+                openPopovers.forEach(popover => popover.remove());
+            }
+        });
+
         document.body.addEventListener('htmx:afterSettle', function (evt) {
             initPopovers(evt.target);
+            
+            if (evt.detail.target && evt.detail.target.id === 'domains-table-content') {
+                const scrollContainer = document.querySelector('#domains-wrapper');
+                if (scrollContainer && savedScrollPosition !== undefined) {
+                    requestAnimationFrame(() => {
+                        scrollContainer.scrollTop = savedScrollPosition;
+                    });
+                }
+            }
+        });
+
+        document.body.addEventListener('htmx:beforeRequest', function(evt) {
+            if (evt.detail.elt.id === 'domains-list-container' && window.pausePolling) {
+                evt.preventDefault();
+            }
         });
     })();
 
-    // === 2. LÓGICA DO SEARCH (FILTROS) ===
-    document.addEventListener("DOMContentLoaded", function () {
-        const input = document.getElementById('discord-search-input');
-        const realInput = document.getElementById('real-search-value');
-        const chipsArea = document.getElementById('search-chips-area');
-        const suggestionBox = document.getElementById('search-suggestions');
+    // === FLATPICKR DATE FILTERS & SEARCH ===
+    document.addEventListener("DOMContentLoaded", function() {
         const projectId = "{{ project.id }}";
-
-        let activeFilters = [];
-        let cachedOptions = null;
         let dbDates = [];
         let dbSsl = [];
-        const icons = {
-            'status:': '<i class="fas fa-server"></i>',
-            'tech:': '<i class="fas fa-code"></i>',
-            'portas:': '<i class="fas fa-ethernet"></i>',
-            'path:': '<i class="fas fa-folder-open"></i>',
-            'subdominio:': '<i class="fas fa-globe"></i>',
-            'date:': '<i class="far fa-calendar-check"></i>',
-            'ssl:': '<i class="fas fa-lock"></i>'
-        };
 
         const commonConfig = {
             mode: "range",
@@ -364,17 +537,12 @@
             disableMobile: "true",
             
             onDayCreate: function(dObj, dStr, fp, dayElem) {
-                // Formata a data do calendário para comparar com a lista (YYYY-MM-DD)
-                // O timezone offset previne problemas de fuso horário na formatação
                 const date = fp.formatDate(dayElem.dateObj, "Y-m-d");
-                
-                // Define qual lista olhar (Descoberta ou SSL)
                 const targetList = (fp.element.id === 'flatpickr-date') ? dbDates : dbSsl;
                 
-                // Se a data existe na lista, adiciona a classe CSS especial
                 if (targetList.includes(date)) {
                     dayElem.classList.add('has-data');
-                    dayElem.title = "Possui dados registrados"; // Tooltip simples
+                    dayElem.title = "Possui dados registrados";
                 }
             },
 
@@ -390,23 +558,39 @@
         const fpDate = flatpickr("#flatpickr-date", commonConfig);
         const fpSsl = flatpickr("#flatpickr-ssl", commonConfig);
 
-        window.openCalendar = function (type) {
+        window.openCalendar = function(type) {
             if (type === 'date') fpDate.open();
             else fpSsl.open();
-        }
+        };
+
+        // === DISCORD-STYLE SEARCH ===
+        const input = document.getElementById('discord-search-input');
+        const realInput = document.getElementById('real-search-value');
+        const chipsArea = document.getElementById('search-chips-area');
+        const suggestionBox = document.getElementById('search-suggestions');
+
+        let activeFilters = [];
+        let cachedOptions = null;
+
+        const icons = {
+            'status:': '<i class="fas fa-server"></i>',
+            'tech:': '<i class="fas fa-code"></i>',
+            'portas:': '<i class="fas fa-ethernet"></i>',
+            'path:': '<i class="fas fa-folder-open"></i>',
+            'subdominio:': '<i class="fas fa-globe"></i>',
+            'date:': '<i class="far fa-calendar-check"></i>',
+            'ssl:': '<i class="fas fa-lock"></i>'
+        };
 
         if (input) {
-            // Busca os dados da API
             fetch(`/api/project/${projectId}/search_options`)
                 .then(r => r.json())
                 .then(data => { 
                     cachedOptions = data; 
                     
-                    // Salva as datas nas variáveis globais
                     if (data.dates) dbDates = data.dates;
                     if (data.ssl_dates) dbSsl = data.ssl_dates;
                     
-                    // Força o calendário a redesenhar para aplicar as cores (onDayCreate rodará novamente)
                     fpDate.redraw();
                     fpSsl.redraw();
                 })
@@ -522,7 +706,6 @@
                 let cleanText = text.trim();
                 if (cleanText.endsWith(',')) cleanText = cleanText.slice(0, -1);
 
-                // Evita duplicatas do mesmo filtro de data (remove anteriores se houver)
                 if (cleanText.startsWith('date:') || cleanText.startsWith('ssl:')) {
                     const prefix = cleanText.split(':')[0] + ':';
                     activeFilters = activeFilters.filter(f => !f.startsWith(prefix));
@@ -550,7 +733,6 @@
                     let displayHTML = filter;
                     if (filter.includes(':')) {
                         const [k, v] = filter.split(':');
-                        // Formatação visual para Range de Datas
                         let formattedVal = v.replace(/,/g, ', ');
                         if (v.includes(' to ')) formattedVal = v.replace(' to ', ' ➝ ');
 
@@ -573,5 +755,4 @@
         }
     });
 </script>
-
 {% endblock %}

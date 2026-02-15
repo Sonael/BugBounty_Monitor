@@ -3,25 +3,28 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="BugBounty Monitor - Plataforma profissional de monitoramento de segurança">
     <title>BugBounty Monitor</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🛡️</text></svg>">
+    
+    <!-- CSS Dependencies -->
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
     <link rel="stylesheet" type="text/css" href="https://npmcdn.com/flatpickr/dist/themes/airbnb.css">
-
-    
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
+    <!-- Navigation -->
     <nav class="navbar navbar-expand-lg navbar-dark navbar-custom mb-4">
         <div class="container">
-            <a class="navbar-brand" href="{{ url_for('main.dashboard') }}">
-                <i class="fas fa-shield-alt me-2"></i>BugBounty<span class="fw-light">Monitor</span>
+            <a class="navbar-brand d-flex align-items-center" href="{{ url_for('main.dashboard') }}">
+                <i class="fas fa-shield-alt me-2"></i>
+                <span>BugBounty<span class="fw-light">Monitor</span></span>
             </a>
             
             {% if current_user.is_authenticated %}
-            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navContent">
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navContent" aria-controls="navContent" aria-expanded="false" aria-label="Toggle navigation">
                 <span class="navbar-toggler-icon"></span>
             </button>
             
@@ -29,19 +32,24 @@
                 <ul class="navbar-nav ms-auto align-items-center">
                     <li class="nav-item me-3">
                         <span class="navbar-text text-white-50">
-                            <i class="fas fa-user-circle"></i> {{ current_user.username }}
+                            <i class="fas fa-user-circle me-1"></i>
+                            <span>{{ current_user.username }}</span>
                         </span>
                     </li>
                     <li class="nav-item">
-                        <a href="{{ url_for('main.logout') }}" class="btn btn-outline-light btn-sm px-3">Sair</a>
+                        <a href="{{ url_for('main.logout') }}" class="btn btn-outline-light btn-sm px-3">
+                            <i class="fas fa-sign-out-alt me-1"></i>Sair
+                        </a>
                     </li>
                 </ul>
             </div>
             {% else %}
-             <div class="collapse navbar-collapse" id="navContent">
+            <div class="collapse navbar-collapse" id="navContent">
                 <ul class="navbar-nav ms-auto">
                     <li class="nav-item">
-                        <a class="nav-link" href="{{ url_for('main.index') }}">Login</a>
+                        <a class="nav-link" href="{{ url_for('main.index') }}">
+                            <i class="fas fa-sign-in-alt me-1"></i>Login
+                        </a>
                     </li>
                 </ul>
             </div>
@@ -49,25 +57,33 @@
         </div>
     </nav>
 
-    <div id="flash-overlay">
+    <!-- Flash Messages Overlay -->
+    <div id="flash-overlay" role="alert" aria-live="polite">
         <div id="flash-messages">
             {% with messages = get_flashed_messages(with_categories=true) %}
                 {% if messages %}
                     {% for category, message in messages %}
                         {% set b_class = 'info' %}
-                        {% if category == 'error' %}{% set b_class = 'danger' %}
-                        {% elif category == 'message' %}{% set b_class = 'info' %}
-                        {% else %}{% set b_class = category %}{% endif %}
+                        {% if category == 'error' %}
+                            {% set b_class = 'danger' %}
+                        {% elif category == 'message' %}
+                            {% set b_class = 'info' %}
+                        {% else %}
+                            {% set b_class = category %}
+                        {% endif %}
                         
                         {% set icon = 'fa-info-circle' %}
-                        {% if b_class == 'success' %}{% set icon = 'fa-check-circle' %}
-                        {% elif b_class == 'danger' %}{% set icon = 'fa-times-circle' %}
-                        {% elif b_class == 'warning' %}{% set icon = 'fa-exclamation-triangle' %}
+                        {% if b_class == 'success' %}
+                            {% set icon = 'fa-check-circle' %}
+                        {% elif b_class == 'danger' %}
+                            {% set icon = 'fa-times-circle' %}
+                        {% elif b_class == 'warning' %}
+                            {% set icon = 'fa-exclamation-triangle' %}
                         {% endif %}
 
                         <div class="alert alert-{{ b_class }} alert-dismissible fade show border-0 mb-2" role="alert">
                             <div class="d-flex align-items-center">
-                                <i class="fas {{ icon }} me-2 fa-lg"></i>
+                                <i class="fas {{ icon }} me-2 fa-lg" aria-hidden="true"></i>
                                 <div>{{ message }}</div>
                             </div>
                             <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
@@ -78,10 +94,12 @@
         </div>
     </div>
 
-    <div class="container pb-5">
+    <!-- Main Content -->
+    <main class="container pb-5">
         {% block content %}{% endblock %}
-    </div>
+    </main>
 
+    <!-- JavaScript Dependencies -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script src="https://unpkg.com/htmx.org@1.9.10"></script>
     <script src="https://unpkg.com/idiomorph/dist/idiomorph-ext.min.js"></script>
@@ -90,30 +108,27 @@
     
     <script>
         document.addEventListener("DOMContentLoaded", function() {
-            // Função para auto-fechar alertas
-            function setupAlertAutoClose() {
-                var alerts = document.querySelectorAll('#flash-overlay .alert');
-                alerts.forEach(function(alertEl) {
-                    // Só adiciona timeout se ainda não tiver sido processado
+            // Auto-close alerts configuration
+            const setupAlertAutoClose = () => {
+                const alerts = document.querySelectorAll('#flash-overlay .alert');
+                alerts.forEach(alertEl => {
                     if (!alertEl.dataset.autoCloseSet) {
                         alertEl.dataset.autoCloseSet = "true";
-                        setTimeout(function() {
-                            var bsAlert = bootstrap.Alert.getOrCreateInstance(alertEl);
+                        setTimeout(() => {
+                            const bsAlert = bootstrap.Alert.getOrCreateInstance(alertEl);
                             if (bsAlert) {
                                 bsAlert.close();
                             }
                         }, 5000);
                     }
                 });
-            }
+            };
 
-            // Roda ao carregar a página
+            // Initialize on page load
             setupAlertAutoClose();
 
-            // Roda sempre que o HTMX trocar conteúdo
-            document.body.addEventListener('htmx:afterSwap', function(evt) {
-                setupAlertAutoClose();
-            });
+            // Re-initialize on HTMX content swap
+            document.body.addEventListener('htmx:afterSwap', setupAlertAutoClose);
         });
     </script>
 

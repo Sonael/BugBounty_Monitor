@@ -1,4 +1,4 @@
-{% set refresh_rate = 'every 3s' if project.scan_status in ['Rodando', 'Na fila'] else 'every 3s' %}
+{% set refresh_rate = 'every 3s' if project.scan_status in ['Rodando', 'Na fila'] else 'every 60s' %}
 
 <article 
     class="card border-0 shadow-sm mb-4" 

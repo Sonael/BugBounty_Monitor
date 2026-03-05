@@ -5,7 +5,7 @@
     <tr class="align-middle">
         <!-- Severity Badge -->
         <td class="text-center bg-light">
-            <span class="vuln-badge vuln-{{ vuln.severity }}" role="status" aria-label="Severidade {{ vuln.severity }}">
+            <span class="vuln-badge vuln-{{ vuln.severity | lower }}" role="status" aria-label="Severidade {{ vuln.severity }}">
                 {{ vuln.severity }}
             </span>
         </td>
@@ -18,7 +18,7 @@
         
         <!-- Vulnerability Details -->
         <td>
-            <h3 class="text-dark fw-bold mb-1 h6">{{ vuln.name }}</h3>
+            <h3 class="text-dark fw-bold mb-1 h6">{{ vuln.tool }} — {{ vuln.severity }}</h3>
             <p class="text-muted small text-break mb-0" style="line-height: 1.4; max-width: 500px;">
                 {{ vuln.description }}
             </p>
@@ -27,7 +27,7 @@
         <!-- Affected Domain -->
         <td>
             <a 
-                href="http://{{ domain.name }}" 
+                href="https://{{ domain.name }}" 
                 target="_blank" 
                 rel="noopener noreferrer"
                 class="text-decoration-none fw-bold text-primary"

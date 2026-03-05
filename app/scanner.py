@@ -3,9 +3,41 @@ import json
 import os
 import uuid
 import csv
+import re
 import urllib.request
 from datetime import datetime
 import requests
+
+# --- Funções de Sanitização de Input ---
+
+# Caracteres permitidos em domínios (RFC 1123 + internacionalização básica)
+_SAFE_DOMAIN_RE = re.compile(r'^[a-zA-Z0-9.\-]+$')
+# Protocolo permitido em URLs
+_SAFE_SCHEME_RE = re.compile(r'^https?://')
+
+def _sanitize_domain(value: str) -> str:
+    """
+    Valida que o valor é um hostname seguro antes de usá-lo em comandos shell.
+    Lança ValueError se detectar caracteres perigosos (ex: ';', '|', '$', '`').
+    """
+    clean = value.strip().replace('https://', '').replace('http://', '').split('/')[0].split(':')[0]
+    if not _SAFE_DOMAIN_RE.match(clean):
+        raise ValueError(f"[SECURITY] Domínio com caracteres inválidos bloqueado: {value!r}")
+    return clean
+
+def _sanitize_url(value: str) -> str:
+    """
+    Valida que a URL tem esquema http/https e hostname seguro.
+    Lança ValueError se detectar injeção.
+    """
+    value = value.strip()
+    if not _SAFE_SCHEME_RE.match(value):
+        raise ValueError(f"[SECURITY] URL com esquema inválido bloqueada: {value!r}")
+    from urllib.parse import urlparse
+    host = urlparse(value).netloc.split(':')[0]
+    if not _SAFE_DOMAIN_RE.match(host):
+        raise ValueError(f"[SECURITY] URL com host inválido bloqueada: {value!r}")
+    return value
 
 # --- Função Utilitária de Comando com Debug ---
 def run_command(command, timeout=None):
@@ -40,6 +72,7 @@ def find_subdomains(target_domain):
     Fluxo Unificado: Subfinder + Amass -> Deduplicação.
     Retorna uma lista limpa de subdomínios únicos (sem IPs, CIDRs ou ASNs).
     """
+    target_domain = _sanitize_domain(target_domain)
     print(f"[SCANNER] Iniciando Recon Híbrido (Subfinder + Amass) para {target_domain}...")
     
     unique_id = uuid.uuid4().hex
@@ -324,8 +357,6 @@ def parse_dalfox_json(data):
     """
     Parser robusto para o JSON do Dalfox.
     """
-    print(f"[SCANNER DEBUG] JSON Bruto Dalfox: {data}")
-
     host = data.get('url') or data.get('target') or data.get('poc') or ""
     payload = data.get('payload') or "Payload genérico"
     param = data.get('param') or "Parâmetro desconhecido"
@@ -372,6 +403,11 @@ def run_dig_info(domain):
     """
     Roda DIG para pegar CNAME e MX.
     """
+    try:
+        domain = _sanitize_domain(domain)
+    except ValueError as e:
+        print(e)
+        return None
     info = []
     try:
         cname = subprocess.run(f"dig +short CNAME {domain}", shell=True, capture_output=True, text=True).stdout.strip()
@@ -452,6 +488,11 @@ def scan_cmseek(target_url):
     """
     Detecta qual CMS o site usa lendo o JSON de resultado oficial.
     """
+    try:
+        target_url = _sanitize_url(target_url)
+    except ValueError as e:
+        print(e)
+        return None
     print(f"[SCANNER] Rodando CMSeeK em {target_url}...")
     
     # 1. Rodar o comando
@@ -504,6 +545,11 @@ def scan_ffuf(target_url):
     """
     Tenta descobrir diretórios ocultos. Retorna 'raw_path' para salvar no domínio.
     """
+    try:
+        target_url = _sanitize_url(target_url)
+    except ValueError as e:
+        print(e)
+        return []
     print(f"[SCANNER] Rodando FFuf (Fuzzing) em {target_url}...")
     output_file = f"ffuf_{uuid.uuid4().hex}.json"
     

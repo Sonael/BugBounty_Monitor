@@ -13,7 +13,7 @@
 
 <div class="col-md-4 mb-4" 
      id="project-card-{{ project.id }}"
-     hx-get="{{ url_for('main.project_card_part', id=project.id) }}?t={{ range(1, 10000) | random }}"
+     hx-get="{{ url_for('main.project_card_part', id=project.id) }}"
      hx-trigger="{{ refresh_rate }}" 
      hx-swap="outerHTML">
      

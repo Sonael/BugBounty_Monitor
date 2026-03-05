@@ -1,4 +1,4 @@
-from flask import Blueprint, render_template, redirect, url_for, request, flash, jsonify
+from flask import Blueprint, render_template, redirect, url_for, request, flash, jsonify, make_response, abort
 from flask_login import login_user, login_required, current_user, logout_user
 from werkzeug.security import generate_password_hash, check_password_hash
 from . import db, celery
@@ -238,6 +238,8 @@ def add_project():
 @login_required
 def project_details(id):
     project = Project.query.get_or_404(id)
+    if project.user_id != current_user.id:
+        abort(403)
     
     domains = project.domains
     stats = {
@@ -260,6 +262,8 @@ def project_details(id):
 @login_required
 def start_scan(id, mode):
     project = Project.query.get_or_404(id)
+    if project.user_id != current_user.id:
+        abort(403)
     
     if mode not in ['recon', 'vuln', 'full', 'baseline']:
         return "Modo inválido", 400
@@ -280,6 +284,8 @@ def start_scan(id, mode):
 @login_required
 def stop_scan(id):
     project = Project.query.get_or_404(id)
+    if project.user_id != current_user.id:
+        abort(403)
     
     if project.current_task_id:
         try:
@@ -299,6 +305,8 @@ def stop_scan(id):
 @login_required
 def edit_project(id):
     project = Project.query.get_or_404(id)
+    if project.user_id != current_user.id:
+        abort(403)
     
     name = request.form.get('name')
     target_url = request.form.get('target_url')
@@ -386,6 +394,8 @@ def edit_project(id):
 @login_required
 def delete_project(id):
     project = Project.query.get_or_404(id)
+    if project.user_id != current_user.id:
+        abort(403)
     if project.current_task_id:
         try:
             celery.control.revoke(project.current_task_id, terminate=True)
@@ -401,18 +411,24 @@ def delete_project(id):
 @login_required
 def project_status_part(id):
     project = Project.query.get_or_404(id)
+    if project.user_id != current_user.id:
+        abort(403)
     return render_template('partials/status_card.html', project=project)
 
 @main.route('/project/<int:id>/controls_part')
 @login_required
 def project_controls_part(id):
     project = Project.query.get_or_404(id)
+    if project.user_id != current_user.id:
+        abort(403)
     return render_template('partials/controls.html', project=project)
 
 @main.route('/project/<int:id>/vulns_part')
 @login_required
 def project_vulns_part(id):
     project = Project.query.get_or_404(id)
+    if project.user_id != current_user.id:
+        abort(403)
     return render_template('partials/vulns_list.html', project=project)
 
 @main.route('/project/<int:id>/card_part')
@@ -420,17 +436,24 @@ def project_vulns_part(id):
 def project_card_part(id):
     db.session.expire_all() 
     project = Project.query.get_or_404(id)
+    if project.user_id != current_user.id:
+        abort(403)
     return render_template('partials/dashboard_card.html', project=project)
 
 @main.route('/project/<int:id>/count_domains')
 @login_required
 def count_domains(id):
     project = Project.query.get_or_404(id)
+    if project.user_id != current_user.id:
+        abort(403)
     return str(len(project.domains))
 
 @main.route('/project/<int:id>/count_vulns')
 @login_required
 def count_vulns(id):
+    project = Project.query.get_or_404(id)
+    if project.user_id != current_user.id:
+        abort(403)
     # Faz um Join para contar vulns apenas deste projeto
     total = Vulnerability.query.join(Domain).filter(Domain.project_id == id).count()
     return str(total)
@@ -504,6 +527,8 @@ def parse_discord_search(query_str):
 @login_required
 def project_domains_part(id):
     project = Project.query.get_or_404(id)
+    if project.user_id != current_user.id:
+        abort(403)
     search_query = request.args.get('q', '')
     status_filter = request.args.get('status')
     
@@ -609,6 +634,9 @@ def project_domains_part(id):
 @main.route('/api/project/<int:id>/search_options')
 @login_required
 def project_search_options(id):
+    project = Project.query.get_or_404(id)
+    if project.user_id != current_user.id:
+        abort(403)
     # Status
     status_q = db.session.query(Domain.status_code).filter_by(project_id=id).distinct().all()
     codes = sorted([str(r[0]) for r in status_q if r[0] and r[0] > 0])

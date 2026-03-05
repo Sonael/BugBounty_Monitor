@@ -28,7 +28,10 @@ def create_app():
     app = Flask(__name__)
     
     # Configurações de Segurança e Banco
-    app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'chave-padrao-dev-insegura')
+    secret_key = os.environ.get('SECRET_KEY')
+    if not secret_key:
+        raise RuntimeError("❌ [CONFIG] SECRET_KEY não definida! Configure a variável de ambiente antes de iniciar.")
+    app.config['SECRET_KEY'] = secret_key
     app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL')
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
     

@@ -52,7 +52,7 @@
                     <!-- Subdomain Name & Details -->
                     <td class="ps-4">
                         <a 
-                            href="http://{{ domain.name }}" 
+                            href="https://{{ domain.name }}" 
                             target="_blank" 
                             rel="noopener noreferrer"
                             class="fw-bold text-dark text-decoration-none"
@@ -119,7 +119,7 @@
                                     data-bs-html="true" 
                                     data-bs-placement="bottom" 
                                     data-bs-title="Outras Portas"
-                                    data-bs-content="<div class='d-flex flex-wrap gap-1'>{% for p in ports[5:] %}<span class='badge bg-primary bg-opacity-10 text-primary border border-primary fw-normal'>:{{ p.strip() }}</span>{% endfor %}</div>"
+                                    data-bs-content="<div class='d-flex flex-wrap gap-1'>{% for p in ports[5:] %}<span class='badge bg-primary bg-opacity-10 text-primary border border-primary fw-normal'>:{{ p.strip() | e }}</span>{% endfor %}</div>"
                                     aria-label="Ver mais {{ ports|length - 5 }} portas">
                                     +{{ ports|length - 5 }}
                                 </button>
@@ -152,7 +152,7 @@
                                     data-bs-html="true"
                                     data-bs-placement="bottom"
                                     data-bs-title="Outras Tecnologias"
-                                    data-bs-content="<div class='d-flex flex-wrap gap-1'>{% for tech in techs[5:] %}<span class='badge border fw-normal text-dark bg-light'>{{ tech }}</span>{% endfor %}</div>"
+                                    data-bs-content="<div class='d-flex flex-wrap gap-1'>{% for tech in techs[5:] %}<span class='badge border fw-normal text-dark bg-light'>{{ tech | e }}</span>{% endfor %}</div>"
                                     aria-label="Ver mais {{ techs|length - 5 }} tecnologias">
                                     +{{ techs|length - 5 }}
                                 </button>
@@ -174,7 +174,7 @@
                         <div class="d-flex flex-wrap gap-1" role="list" aria-label="Paths descobertos">
                             {% if paths|length > 5 %}
                                 {% for path in paths[:5] %}
-                                <a href="http://{{ domain.name }}{{ path.strip() }}" 
+                                <a href="https://{{ domain.name }}{{ path.strip() }}" 
                                    target="_blank"
                                    rel="noopener noreferrer"
                                    class="badge bg-secondary text-decoration-none"
@@ -192,13 +192,13 @@
                                     data-bs-html="true"
                                     data-bs-placement="left"
                                     data-bs-title="Outros Paths"
-                                    data-bs-content="<div class='d-flex flex-wrap gap-1'>{% for path in paths[5:] %}<a href='http://{{ domain.name }}{{ path.strip() }}' target='_blank' rel='noopener noreferrer' class='badge bg-secondary text-decoration-none'><i class='fas fa-external-link-alt me-1' style='font-size: 0.6em;'></i>{{ path.strip() }}</a>{% endfor %}</div>"
+                                    data-bs-content="<div class='d-flex flex-wrap gap-1'>{% for path in paths[5:] %}<a href='https://{{ domain.name }}{{ path.strip() | e }}' target='_blank' rel='noopener noreferrer' class='badge bg-secondary text-decoration-none'><i class='fas fa-external-link-alt me-1' style='font-size: 0.6em;'></i>{{ path.strip() | e }}</a>{% endfor %}</div>"
                                     aria-label="Ver mais {{ paths|length - 5 }} paths">
                                     +{{ paths|length - 5 }}
                                 </button>
                             {% else %}
                                 {% for path in paths %}
-                                <a href="http://{{ domain.name }}{{ path.strip() }}" 
+                                <a href="https://{{ domain.name }}{{ path.strip() }}" 
                                    target="_blank"
                                    rel="noopener noreferrer"
                                    class="badge bg-secondary text-decoration-none"

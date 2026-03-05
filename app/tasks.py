@@ -10,6 +10,7 @@ from datetime import datetime,date
 import os
 import traceback
 import fnmatch
+import uuid
 
 
 @celery.task(bind=True)
@@ -124,7 +125,7 @@ def run_scan_task(self, project_id, mode='full'):
                     project.scan_message = "2/4 Verificando Portas Abertas (Naabu)..."
                     db.session.commit()
                     
-                    temp_subs_file = f"subs_naabu_{project.id}.txt"
+                    temp_subs_file = f"subs_naabu_{project.id}_{uuid.uuid4().hex}.txt"
                     with open(temp_subs_file, 'w') as f:
                         f.write("\n".join(found_subs))
                     
@@ -454,22 +455,20 @@ def process_vulns(vuln_list, project_id):
         dom_id = domain_cache.get(clean_host)
         
         if not dom_id:
-            if clean_host in domain_cache:
-                dom_id = domain_cache[clean_host]
-            else:
-                try:
-                    new_dynamic_domain = Domain(
-                        name=clean_host, 
-                        project_id=project_id,
-                        scanned_vulns=True, 
-                        status_code=200,
-                        technologies="Descoberto via Vuln Scan"
-                    )
-                    db.session.add(new_dynamic_domain)
-                    db.session.commit()
-                    dom_id = new_dynamic_domain.id
-                    domain_cache[clean_host] = dom_id
-                except: continue
+            try:
+                new_dynamic_domain = Domain(
+                    name=clean_host, 
+                    project_id=project_id,
+                    scanned_vulns=True, 
+                    status_code=200,
+                    technologies="Descoberto via Vuln Scan"
+                )
+                db.session.add(new_dynamic_domain)
+                db.session.commit()
+                dom_id = new_dynamic_domain.id
+                domain_cache[clean_host] = dom_id
+            except Exception:
+                continue
                 
         if dom_id:
             exists = Vulnerability.query.filter_by(domain_id=dom_id, description=v['description']).first()

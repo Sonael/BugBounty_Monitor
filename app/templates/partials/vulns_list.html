@@ -1,54 +1,197 @@
-{% set all_vulns = project.domains | map(attribute='vulnerabilities') | sum(start=[]) %}
+{#
+  vulns_list.html
+  Recebe: vulns = lista de (Vulnerability, domain_name) via query SQL direta
+  Sem N+1 — não itera project.domains
+#}
 
-{% for domain in project.domains %}
-    {% for vuln in domain.vulnerabilities %}
-    <tr class="align-middle">
-        <!-- Severity Badge -->
-        <td class="text-center bg-light">
-            <span class="vuln-badge vuln-{{ vuln.severity | lower }}" role="status" aria-label="Severidade {{ vuln.severity }}">
-                {{ vuln.severity }}
-            </span>
-        </td>
-        
-        <!-- Tool Name -->
-        <td class="text-secondary fw-bold small">
-            <i class="fas fa-toolbox me-1 opacity-50" aria-hidden="true"></i>
-            <span>{{ vuln.tool }}</span>
-        </td>
-        
-        <!-- Vulnerability Details -->
-        <td>
-            <h3 class="text-dark fw-bold mb-1 h6">{{ vuln.tool }} — {{ vuln.severity }}</h3>
-            <p class="text-muted small text-break mb-0" style="line-height: 1.4; max-width: 500px;">
-                {{ vuln.description }}
-            </p>
-        </td>
-        
-        <!-- Affected Domain -->
-        <td>
-            <a 
-                href="https://{{ domain.name }}" 
-                target="_blank" 
-                rel="noopener noreferrer"
-                class="text-decoration-none fw-bold text-primary"
-                aria-label="Abrir {{ domain.name }} em nova aba">
-                {{ domain.name }}
-                <i class="fas fa-external-link-alt ms-1 small opacity-50" aria-hidden="true"></i>
-            </a>
-        </td>
-    </tr>
-    {% endfor %}
+{% if vulns %}
+
+{# ── Contagem por severidade ─────────────────────────────── #}
+{% set ns = namespace(crit=0, high=0, med=0, low=0, info=0) %}
+{% for vuln, dname in vulns %}
+    {% set s = vuln.severity | lower if vuln.severity else 'info' %}
+    {% if s == 'critical' %}{% set ns.crit = ns.crit + 1 %}
+    {% elif s == 'high' %}{% set ns.high = ns.high + 1 %}
+    {% elif s == 'medium' %}{% set ns.med = ns.med + 1 %}
+    {% elif s == 'low' %}{% set ns.low = ns.low + 1 %}
+    {% else %}{% set ns.info = ns.info + 1 %}{% endif %}
 {% endfor %}
 
-<!-- Empty State -->
-{% if not all_vulns %}
-    <tr>
-        <td colspan="4" class="text-center py-5">
-            <div class="text-muted opacity-50">
-                <i class="fas fa-check-shield fa-3x mb-3" aria-hidden="true"></i>
-                <p class="mb-0 fw-bold">Nenhuma vulnerabilidade detectada.</p>
-                <small class="d-block mt-1">Seu perímetro parece seguro por enquanto.</small>
+{# ── Summary bar ─────────────────────────────────────────── #}
+<div class="d-flex flex-wrap gap-2 mb-4 p-3 bg-light rounded border">
+    <span class="fw-bold text-muted small me-2 align-self-center">
+        {{ vulns | length }} {{ 'vulnerabilidade' if vulns|length == 1 else 'vulnerabilidades' }}
+    </span>
+    {% if ns.crit  > 0 %}<span class="badge bg-danger fs-6 px-3">💀 {{ ns.crit }} CRÍTICO</span>{% endif %}
+    {% if ns.high  > 0 %}<span class="badge px-3 fs-6" style="background:#fd7e14">🔥 {{ ns.high }} ALTO</span>{% endif %}
+    {% if ns.med   > 0 %}<span class="badge bg-warning text-dark px-3">⚠️ {{ ns.med }} MÉDIO</span>{% endif %}
+    {% if ns.low   > 0 %}<span class="badge bg-info text-dark px-3">🔵 {{ ns.low }} BAIXO</span>{% endif %}
+    {% if ns.info  > 0 %}<span class="badge bg-secondary px-3">ℹ️ {{ ns.info }} INFO</span>{% endif %}
+</div>
+
+{# ── Cards de vulnerabilidades ───────────────────────────── #}
+<div class="d-flex flex-column gap-3">
+{% for vuln, domain_name in vulns %}
+
+{% set sev = vuln.severity | lower if vuln.severity else 'info' %}
+{% if sev == 'critical' %}
+    {% set border_color = 'border-danger' %}
+    {% set badge_class  = 'bg-danger' %}
+    {% set icon         = '💀' %}
+    {% set text_color   = 'text-danger' %}
+{% elif sev == 'high' %}
+    {% set border_color = 'border-warning' %}
+    {% set badge_class  = 'text-white' %}
+    {% set badge_style  = 'background:#fd7e14' %}
+    {% set icon         = '🔥' %}
+    {% set text_color   = 'text-warning' %}
+{% elif sev == 'medium' %}
+    {% set border_color = 'border-warning' %}
+    {% set badge_class  = 'bg-warning text-dark' %}
+    {% set icon         = '⚠️' %}
+    {% set text_color   = 'text-warning' %}
+{% elif sev == 'low' %}
+    {% set border_color = 'border-info' %}
+    {% set badge_class  = 'bg-info text-dark' %}
+    {% set icon         = '🔵' %}
+    {% set text_color   = 'text-info' %}
+{% else %}
+    {% set border_color = 'border-secondary' %}
+    {% set badge_class  = 'bg-secondary' %}
+    {% set icon         = 'ℹ️' %}
+    {% set text_color   = 'text-secondary' %}
+{% endif %}
+
+<div class="card border-start border-4 {{ border_color }} shadow-sm">
+    <div class="card-body p-0">
+
+        {# ── Header ── #}
+        <div class="d-flex justify-content-between align-items-start p-3 border-bottom bg-light">
+            <div class="d-flex align-items-center gap-2 flex-wrap">
+                <span class="badge {{ badge_class }} px-2 py-1"
+                      {% if badge_style is defined %}style="{{ badge_style }}"{% endif %}>
+                    {{ icon }} {{ vuln.severity | upper if vuln.severity else 'INFO' }}
+                </span>
+
+                {# Tool badge com ícone específico #}
+                {% set tool_lc = vuln.tool | lower %}
+                {% if 'nuclei' in tool_lc %}
+                    {% set tool_icon = '☢️' %}
+                    {% set tool_color = 'bg-danger bg-opacity-10 text-danger border-danger' %}
+                {% elif 'dalfox' in tool_lc or 'xss' in tool_lc %}
+                    {% set tool_icon = '⚡' %}
+                    {% set tool_color = 'bg-warning bg-opacity-10 text-warning border-warning' %}
+                {% elif 'sqlmap' in tool_lc or 'sql' in tool_lc %}
+                    {% set tool_icon = '💉' %}
+                    {% set tool_color = 'bg-info bg-opacity-10 text-info border-info' %}
+                {% elif 'ffuf' in tool_lc %}
+                    {% set tool_icon = '📂' %}
+                    {% set tool_color = 'bg-secondary bg-opacity-10 text-secondary border-secondary' %}
+                {% else %}
+                    {% set tool_icon = '🔧' %}
+                    {% set tool_color = 'bg-light text-dark border-secondary' %}
+                {% endif %}
+                <span class="badge border {{ tool_color }} px-2 py-1 fw-bold">
+                    {{ tool_icon }} {{ vuln.tool }}
+                </span>
             </div>
-        </td>
-    </tr>
+
+            <div class="d-flex align-items-center gap-2 flex-shrink-0 ms-2">
+                <a href="https://{{ domain_name }}"
+                   target="_blank"
+                   rel="noopener noreferrer"
+                   class="text-decoration-none {{ text_color }} fw-bold small"
+                   aria-label="Abrir {{ domain_name }}">
+                    <i class="fas fa-external-link-alt me-1 opacity-50" aria-hidden="true"></i>{{ domain_name }}
+                </a>
+                {% if vuln.found_at %}
+                <span class="text-muted small font-monospace d-none d-md-inline">
+                    {{ vuln.found_at.strftime('%d/%m %H:%M') }}
+                </span>
+                {% endif %}
+            </div>
+        </div>
+
+        {# ── Body: parse da descrição em campos legíveis ── #}
+        <div class="p-3">
+            {% set desc = vuln.description or '' %}
+
+            {# Nuclei: "Matcher: xxx | URL: https://..." #}
+            {% if 'Matcher:' in desc and 'URL:' in desc %}
+                {% set parts = desc.split(' | ') %}
+                <div class="row g-2">
+                    {% for part in parts %}
+                    {% if ':' in part %}
+                        {% set kv = part.split(':', 1) %}
+                        <div class="col-12">
+                            <span class="text-muted small fw-bold text-uppercase me-2"
+                                  style="letter-spacing:.5px">{{ kv[0].strip() }}:</span>
+                            {% if kv[0].strip() == 'URL' %}
+                                <a href="{{ kv[1].strip() }}"
+                                   target="_blank"
+                                   rel="noopener noreferrer"
+                                   class="font-monospace small text-break text-primary">
+                                    {{ kv[1].strip() }}
+                                </a>
+                            {% else %}
+                                <code class="small text-dark bg-light px-2 py-1 rounded">{{ kv[1].strip() }}</code>
+                            {% endif %}
+                        </div>
+                    {% endif %}
+                    {% endfor %}
+                </div>
+
+            {# SQLMap: "Param: xxx | Payload: xxx" #}
+            {% elif 'Param:' in desc and 'Payload:' in desc %}
+                {% set parts = desc.split(' | ') %}
+                <div class="row g-2">
+                    {% for part in parts %}
+                    {% if ':' in part %}
+                        {% set kv = part.split(':', 1) %}
+                        <div class="col-md-6">
+                            <span class="text-muted small fw-bold text-uppercase me-1"
+                                  style="letter-spacing:.5px">{{ kv[0].strip() }}:</span>
+                            <code class="small text-danger bg-danger bg-opacity-10 px-2 py-1 rounded text-break">{{ kv[1].strip() }}</code>
+                        </div>
+                    {% endif %}
+                    {% endfor %}
+                </div>
+
+            {# Dalfox: "Payload: xxx em yyy" #}
+            {% elif 'Payload:' in desc %}
+                {% set parts = desc.split(' | ') %}
+                {% for part in parts %}
+                {% if ':' in part %}
+                    {% set kv = part.split(':', 1) %}
+                    <div class="mb-2">
+                        <span class="text-muted small fw-bold text-uppercase me-1"
+                              style="letter-spacing:.5px">{{ kv[0].strip() }}:</span>
+                        <code class="small text-warning bg-warning bg-opacity-10 px-2 py-1 rounded text-break">{{ kv[1].strip() }}</code>
+                    </div>
+                {% endif %}
+                {% endfor %}
+
+            {# Fallback genérico: mostra como log raw #}
+            {% else %}
+                <pre class="mb-0 small text-dark bg-light p-2 rounded border"
+                     style="white-space: pre-wrap; word-break: break-all; font-family: 'SFMono-Regular', Menlo, monospace; max-height: 200px; overflow-y: auto;">{{ desc }}</pre>
+            {% endif %}
+        </div>
+
+    </div>
+</div>
+{% endfor %}
+</div>
+
+{% else %}
+{# ── Empty state ── #}
+<tr>
+    <td colspan="4" class="text-center py-5">
+        <div class="text-muted opacity-50">
+            <i class="fas fa-shield-alt fa-3x mb-3 text-success" aria-hidden="true"></i>
+            <p class="mb-0 fw-bold">Nenhuma vulnerabilidade detectada.</p>
+            <small class="d-block mt-1">Seu perímetro parece seguro por enquanto.</small>
+        </div>
+    </td>
+</tr>
 {% endif %}

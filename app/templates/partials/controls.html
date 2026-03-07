@@ -1,121 +1,131 @@
-{% set refresh_rate = 'every 3s' if project.scan_status in ['Rodando', 'Na fila'] else 'every 60s' %}
+{#
+  controls.html
+  Recebe: project, pendentes (int — calculado via SQL na rota, sem N+1)
+#}
+{% set refresh_rate = 'every 4s' if project.scan_status in ['Rodando', 'Na fila'] else 'every 60s' %}
+{% set pendentes = pendentes if pendentes is defined else 0 %}
 
-<div id="scan-controls" 
-     hx-get="{{ url_for('main.project_controls_part', id=project.id) }}" 
-     hx-trigger="{{ refresh_rate }}" 
+<div id="scan-controls"
+     hx-get="{{ url_for('main.project_controls_part', id=project.id) }}"
+     hx-trigger="{{ refresh_rate }}"
      hx-swap="outerHTML"
      role="region"
      aria-label="Controles de scan">
-     
+
     {% if project.scan_status == 'Rodando' %}
-        <!-- Scan Running Status -->
-        <div class="card border-primary bg-primary bg-opacity-10 p-3 shadow-sm">
-            <div class="d-flex align-items-center justify-content-between">
-                <div class="d-flex align-items-center text-primary">
-                    <div class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></div>
-                    <strong>Scan em Progresso...</strong>
-                </div>
-                
-                <button 
-                    hx-post="{{ url_for('main.stop_scan', id=project.id) }}" 
+    {# ── Scan em progresso ── #}
+    <div class="card border-primary bg-primary bg-opacity-10 p-3 shadow-sm">
+        <div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
+            <div class="d-flex align-items-center text-primary">
+                <div class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></div>
+                <strong class="text-truncate" style="max-width:280px;" title="{{ project.scan_message }}">
+                    {{ project.scan_message }}
+                </strong>
+            </div>
+            <button hx-post="{{ url_for('main.stop_scan', id=project.id) }}"
                     hx-target="#scan-controls"
                     hx-confirm="Tem certeza? O scan em andamento será interrompido."
-                    class="btn btn-sm btn-danger fw-bold shadow-sm"
+                    class="btn btn-sm btn-danger fw-bold shadow-sm flex-shrink-0"
                     aria-label="Parar scan forçado">
-                    <i class="fas fa-stop-circle me-1" aria-hidden="true"></i>
-                    Parar Forçado
-                </button>
-            </div>
-            <div class="progress mt-2" style="height: 4px;" role="progressbar" aria-label="Progresso do scan">
-                <div class="progress-bar progress-bar-striped progress-bar-animated" style="width: 100%"></div>
-            </div>
+                <i class="fas fa-stop-circle me-1" aria-hidden="true"></i>Parar Forçado
+            </button>
         </div>
+        <div class="progress mt-2" style="height: 4px;" role="progressbar" aria-label="Progresso do scan">
+            <div class="progress-bar progress-bar-striped progress-bar-animated" style="width:100%"></div>
+        </div>
+    </div>
+
+    {% elif project.scan_status == 'Na fila' %}
+    {# ── Na fila — aguardando slot ── #}
+    <div class="card border-secondary bg-light p-3 shadow-sm">
+        <div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
+            <div class="d-flex align-items-center text-secondary">
+                <i class="fas fa-hourglass-half fa-spin me-2" aria-hidden="true"></i>
+                <span class="small fw-bold">{{ project.scan_message or 'Aguardando slot...' }}</span>
+            </div>
+            <button hx-post="{{ url_for('main.stop_scan', id=project.id) }}"
+                    hx-target="#scan-controls"
+                    hx-confirm="Remover da fila?"
+                    class="btn btn-sm btn-outline-secondary fw-bold flex-shrink-0"
+                    aria-label="Remover da fila">
+                <i class="fas fa-times me-1" aria-hidden="true"></i>Remover da Fila
+            </button>
+        </div>
+    </div>
 
     {% else %}
-        <!-- Scan Control Buttons -->
-        <div class="d-flex flex-column gap-2">
-            <div class="btn-group shadow-sm w-100" role="group" aria-label="Controles de scan">
-                <button 
-                    hx-post="{{ url_for('main.start_scan', id=project.id, mode='baseline') }}" 
+    {# ── Botões de controle ── #}
+    <div class="d-flex flex-column gap-2">
+        <div class="btn-group shadow-sm w-100" role="group" aria-label="Modos de scan">
+            <button hx-post="{{ url_for('main.start_scan', id=project.id, mode='baseline') }}"
                     hx-target="#scan-controls"
-                    class="btn btn-outline-secondary" 
-                    title="Salvar dados sem executar scan">
-                    <i class="fas fa-save me-1" aria-hidden="true"></i>
-                    Baseline
-                </button>
-
-                <button 
-                    hx-post="{{ url_for('main.start_scan', id=project.id, mode='recon') }}" 
+                    class="btn btn-outline-secondary"
+                    title="Coleta subdomínios sem executar scan de vuln">
+                <i class="fas fa-save me-1" aria-hidden="true"></i>Baseline
+            </button>
+            <button hx-post="{{ url_for('main.start_scan', id=project.id, mode='recon') }}"
                     hx-target="#scan-controls"
                     class="btn btn-outline-primary"
-                    title="Executar reconhecimento">
-                    <i class="fas fa-satellite-dish me-1" aria-hidden="true"></i>
-                    Recon
-                </button>
-                
-                <button 
-                    hx-post="{{ url_for('main.start_scan', id=project.id, mode='vuln') }}" 
+                    title="Descoberta de subdomínios + HTTPX + Naabu">
+                <i class="fas fa-satellite-dish me-1" aria-hidden="true"></i>Recon
+            </button>
+            <button hx-post="{{ url_for('main.start_scan', id=project.id, mode='vuln') }}"
+                    hx-target="#scan-controls"
+                    class="btn btn-outline-warning"
+                    title="Nuclei + Dalfox + SQLMap nos alvos pendentes">
+                <i class="fas fa-bug me-1" aria-hidden="true"></i>Scan Vulns
+            </button>
+            <button hx-post="{{ url_for('main.start_scan', id=project.id, mode='full') }}"
                     hx-target="#scan-controls"
                     class="btn btn-outline-danger"
-                    title="Escanear vulnerabilidades">
-                    <i class="fas fa-bug me-1" aria-hidden="true"></i>
-                    Scan Vulns
-                </button>
-            </div>
-
-            {% set pendentes = project.domains | selectattr('scanned_vulns', 'equalto', False) | selectattr('status_code', 'in', [200, 201, 202, 204, 301, 302, 307, 308]) | list | length %}
-            
-            {% if pendentes > 0 %}
-                <!-- Pending Targets Alert -->
-                <div class="alert alert-warning d-flex align-items-center p-2 mb-0 border-0 shadow-sm small" role="alert">
-                    <i class="fas fa-exclamation-triangle me-2 text-warning" aria-hidden="true"></i>
-                    <div>
-                        <strong>Atenção:</strong> 
-                        <span>{{ pendentes }} {{ 'novo alvo válido' if pendentes == 1 else 'novos alvos válidos' }} (2xx/3xx) {{ 'aguarda' if pendentes == 1 else 'aguardam' }} análise.</span>
-                    </div>
-                </div>
-            {% else %}
-                <!-- All Scanned Message -->
-                <div class="text-center text-muted small mt-1">
-                    <i class="fas fa-check-circle text-success me-1" aria-hidden="true"></i>
-                    Todos os alvos válidos foram analisados.
-                </div>
-            {% endif %}
+                    title="Recon + Vuln Scan completo">
+                <i class="fas fa-radiation me-1" aria-hidden="true"></i>Full
+            </button>
         </div>
+
+        {% if pendentes > 0 %}
+        <div class="alert alert-warning d-flex align-items-center justify-content-between p-2 mb-0 border-warning shadow-sm small"
+             role="alert">
+            <div class="d-flex align-items-center">
+                <i class="fas fa-exclamation-triangle me-2 text-warning" aria-hidden="true"></i>
+                <span>
+                    <strong>{{ pendentes }}</strong>
+                    {{ 'alvo válido' if pendentes == 1 else 'alvos válidos' }} (2xx/3xx)
+                    {{ 'aguarda' if pendentes == 1 else 'aguardam' }} scan de vulnerabilidades.
+                </span>
+            </div>
+            <button hx-post="{{ url_for('main.start_scan', id=project.id, mode='vuln') }}"
+                    hx-target="#scan-controls"
+                    class="btn btn-warning btn-sm fw-bold flex-shrink-0 ms-2"
+                    title="Iniciar scan de vulnerabilidades agora">
+                Escanear Agora
+            </button>
+        </div>
+        {% else %}
+        <div class="text-center text-muted small mt-1">
+            <i class="fas fa-check-circle text-success me-1" aria-hidden="true"></i>
+            Todos os alvos válidos foram analisados.
+        </div>
+        {% endif %}
+    </div>
     {% endif %}
 </div>
 
-<!-- Flash Messages (OOB Swap) -->
+{# Flash Messages OOB #}
 {% with messages = get_flashed_messages(with_categories=true) %}
     {% if messages %}
-        <div id="flash-messages" hx-swap-oob="true">
-            {% for category, message in messages %}
-                {% set b_class = 'info' %}
-                {% if category == 'error' %}
-                    {% set b_class = 'danger' %}
-                {% elif category == 'message' %}
-                    {% set b_class = 'info' %}
-                {% else %}
-                    {% set b_class = category %}
-                {% endif %}
-                
-                {% set icon = 'fa-info-circle' %}
-                {% if b_class == 'success' %}
-                    {% set icon = 'fa-check-circle' %}
-                {% elif b_class == 'danger' %}
-                    {% set icon = 'fa-times-circle' %}
-                {% elif b_class == 'warning' %}
-                    {% set icon = 'fa-exclamation-triangle' %}
-                {% endif %}
-
-                <div class="alert alert-{{ b_class }} alert-dismissible fade show border-0 mb-2" role="alert">
-                    <div class="d-flex align-items-center">
-                        <i class="fas {{ icon }} me-2 fa-lg" aria-hidden="true"></i>
-                        <div>{{ message }}</div>
-                    </div>
-                    <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+    <div id="flash-messages" hx-swap-oob="true">
+        {% for category, message in messages %}
+            {% set b_class = {'error':'danger','message':'info'}.get(category, category) %}
+            {% set icon = {'success':'fa-check-circle','danger':'fa-times-circle','warning':'fa-exclamation-triangle'}.get(b_class, 'fa-info-circle') %}
+            <div class="alert alert-{{ b_class }} alert-dismissible fade show border-0 mb-2" role="alert">
+                <div class="d-flex align-items-center">
+                    <i class="fas {{ icon }} me-2 fa-lg" aria-hidden="true"></i>
+                    <div>{{ message }}</div>
                 </div>
-            {% endfor %}
-        </div>
+                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Fechar"></button>
+            </div>
+        {% endfor %}
+    </div>
     {% endif %}
 {% endwith %}

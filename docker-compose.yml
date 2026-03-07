@@ -1,9 +1,17 @@
 version: '3.8'
 
 services:
+
+  # -------------------------------------------------------------------------
+  # Web (Flask via Gunicorn — mais estável que flask run em produção)
+  # -------------------------------------------------------------------------
   web:
     build: .
-    command: flask run --host=0.0.0.0 --debug
+    command: >
+      bash -c "
+        flask db upgrade &&
+        gunicorn --bind 0.0.0.0:5000 --workers 2 --timeout 300 --worker-class sync --log-level info --access-logfile - 'app:create_app()'
+      "
     volumes:
       - .:/app
     ports:
@@ -11,44 +19,103 @@ services:
     env_file:
       - .env
     depends_on:
-      - db
-      - redis
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
 
+  # -------------------------------------------------------------------------
+  # Celery Worker — executa os scans
+  # -------------------------------------------------------------------------
   worker:
     build: .
-    command: celery -A app.celery worker --loglevel=info --concurrency=2 --prefetch-multiplier=1
+    command:
+      - bash
+      - -c
+      - |
+        flask wait-for-db &&
+        celery -A app.celery worker --loglevel=info --concurrency=2 --prefetch-multiplier=1 --max-tasks-per-child=50
     volumes:
       - .:/app
     env_file:
       - .env
     depends_on:
-      - db
-      - redis
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
     cap_add:
       - NET_ADMIN
       - NET_RAW
+    healthcheck:
+      test: ["CMD", "celery", "-A", "app.celery", "inspect", "ping", "-t", "5"]
+      interval: 60s
+      timeout: 15s
+      retries: 3
+      start_period: 30s
 
+  # -------------------------------------------------------------------------
+  # Celery Beat — agendador (scan diário)
+  # -------------------------------------------------------------------------
   beat:
     build: .
-    command: celery -A app.celery beat --loglevel=info
+    command:
+      - bash
+      - -c
+      - celery -A app.celery beat --loglevel=info --scheduler celery.beat:PersistentScheduler
     volumes:
       - .:/app
+      - celerybeat_data:/var/celerybeat
     env_file:
       - .env
     depends_on:
-      - redis
-
-  db:
-    image: postgres:13
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
     environment:
-      - POSTGRES_USER=${POSTGRES_USER}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-      - POSTGRES_DB=${POSTGRES_DB}
+      - CELERYBEAT_SCHEDULE_FILENAME=/var/celerybeat/celerybeat-schedule
+
+  # -------------------------------------------------------------------------
+  # PostgreSQL
+  # -------------------------------------------------------------------------
+  db:
+    image: postgres:13-alpine
+    env_file:
+      - .env
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
 
+  # -------------------------------------------------------------------------
+  # Redis
+  # -------------------------------------------------------------------------
   redis:
     image: redis:6-alpine
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
 
 volumes:
   postgres_data:
+  redis_data:
+  celerybeat_data:

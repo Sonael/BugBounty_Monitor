@@ -1,540 +1,672 @@
-from . import celery, db
-from .models import Project, Domain, Vulnerability
-from .scanner import (
-    find_subdomains, check_alive, scan_nuclei_bulk, 
-    scan_crawling_xss_bulk, scan_sqlmap_bulk, 
-    scan_naabu_bulk, run_dig_info, send_discord_embed,
-    scan_ffuf, scan_cmseek, get_first_seen_crtsh
-)
-from datetime import datetime,date
-import os
 import traceback
 import fnmatch
 import uuid
+import os
+import json
+from datetime import datetime, date
 
+from . import celery, db
+from .models import Project, Domain, Vulnerability, ScanHistory, Port
+from .scanner import (
+    find_subdomains, check_alive, scan_nuclei_bulk,
+    scan_crawling_xss_bulk, scan_sqlmap_bulk,
+    scan_naabu_bulk, run_dig_info, send_discord_embed,
+    scan_ffuf, scan_cmseek, get_first_seen_crtsh
+)
+
+
+
+# ---------------------------------------------------------------------------
+# App cache — create_app() é chamado apenas UMA VEZ por processo worker
+# (via @worker_init signal em __init__.py). O cache evita overhead por task.
+# ---------------------------------------------------------------------------
+_flask_app = None
+
+def _get_app():
+    """
+    Retorna o Flask app cacheado.
+    Se não existir (ex: execução fora do worker), cria um novo.
+    """
+    global _flask_app
+    if _flask_app is None:
+        from app import create_app
+        _flask_app = create_app()
+    return _flask_app
+
+
+# ---------------------------------------------------------------------------
+# Helpers internos
+# ---------------------------------------------------------------------------
+
+def _open_history(project_id: int, task_id: str, mode: str):
+    """
+    Cria registro de ScanHistory no início do scan.
+    Retorna None silenciosamente se a tabela não existir (migrations pendentes).
+    NUNCA lança exceção — o scan deve continuar independentemente.
+    """
+    try:
+        h = ScanHistory(project_id=project_id, task_id=task_id,
+                        mode=mode, status='running', started_at=datetime.utcnow())
+        db.session.add(h)
+        db.session.commit()
+        return h
+    except Exception as e:
+        db.session.rollback()
+        print(f"[HISTORY] Aviso: tabela scan_history indisponível, ignorando: {type(e).__name__}")
+        return None
+
+
+def _close_history(history, status: str, **metrics):
+    """Fecha o registro de histórico. Ignora silenciosamente se history for None."""
+    if history is None:
+        return
+    try:
+        history.finished_at = datetime.utcnow()
+        history.status = status
+        for k, v in metrics.items():
+            if hasattr(history, k):
+                setattr(history, k, v)
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        print(f"[HISTORY] Falha ao fechar histórico: {e}")
+
+
+def _write_ports(domain_obj: Domain, port_string: str):
+    """
+    Salva portas no campo texto (compatibilidade) E na tabela Port (normalizada).
+    Opera somente se domain_obj.id já existir (após flush).
+    """
+    if not port_string:
+        return
+    domain_obj.open_ports = port_string
+    if not domain_obj.id:
+        return
+    for p_str in port_string.split(','):
+        p_num = p_str.strip()
+        if p_num.isdigit():
+            try:
+                exists = Port.query.filter_by(
+                    domain_id=domain_obj.id, port_number=int(p_num)
+                ).first()
+                if not exists:
+                    db.session.add(Port(domain_id=domain_obj.id, port_number=int(p_num)))
+            except Exception as e:
+                print(f"[PORTS] Falha ao salvar porta {p_num} em {domain_obj.name}: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Task principal
+# ---------------------------------------------------------------------------
 
 @celery.task(bind=True)
 def run_scan_task(self, project_id, mode='full'):
-    from app import create_app
-    app = create_app()
-    
+    app = _get_app()
+
     with app.app_context():
         project = Project.query.get(project_id)
-        if not project: 
-            print(f"[WORKER ERROR] Projeto ID {project_id} não encontrado!")
+        if not project:
+            print(f"[WORKER] Projeto ID {project_id} não encontrado!")
             return
-        
-        
-        # Verifica se o projeto está "Rodando" OU "Na fila"
-        # E se o ID salvo no banco é DIFERENTE do ID desta tarefa atual.
-        # Se for diferente, significa que esta tarefa é velha/duplicada.
-        if project.scan_status in ['Rodando', 'Na fila'] and project.current_task_id != self.request.id:
-            print(f"[WORKER] IGNORADO: Projeto {project.name} (Status: {project.scan_status}) tem Task ID {project.current_task_id}, mas esta task é {self.request.id}. Abortando.")
+
+        # Bloqueia apenas se já existe OUTRO task ID ativo no banco.
+        # current_task_id == self.request.id → esta é a task certa, continua.
+        # current_task_id == None → race condition resolvida (web pré-salva agora).
+        if (project.current_task_id
+                and project.current_task_id != self.request.id
+                and project.scan_status in ['Rodando', 'Na fila']):
+            print(
+                f"[WORKER] IGNORADO: {project.name} já tem task "
+                f"{project.current_task_id}, esta é {self.request.id}."
+            )
             return "Duplicata ignorada"
 
+        history = _open_history(project_id, self.request.id, mode)
+
         try:
-            print(f"[WORKER] Iniciando task para Projeto: {project.name} (Modo: {mode})")
-            
-            project.current_task_id = self.request.id 
+            print(f"[WORKER] Iniciando task — Projeto: {project.name} | Modo: {mode}")
+
+            project.current_task_id = self.request.id
             project.scan_status = "Rodando"
             project.last_scan_date = datetime.utcnow()
             db.session.commit()
 
-            # Prepara a Blacklist (Out of Scope)
-            blacklist = [line.strip() for line in (project.out_of_scope or "").splitlines() if line.strip()]
+            blacklist = [l.strip() for l in (project.out_of_scope or "").splitlines() if l.strip()]
 
-            # ==============================================================================
-            # FASE 1: RECON (Coleta + Portas + DNS + Status + FUZZING)
-            # ==============================================================================
+            # ==============================================================
+            # FASE 1 — RECON
+            # ==============================================================
             if mode in ['recon', 'full', 'baseline']:
-                print(f"[WORKER] --- Iniciando Fase RECON({mode}) ---")
-                
-                # --- 1. COLETA DE SUBDOMÍNIOS ---
+                print(f"[WORKER] --- FASE RECON ({mode}) ---")
+
+                # 1. Coleta subdomínios
                 found_subs = []
-                
                 if project.discovery_enabled:
-                    # Passo A: Definir Sementes (APENAS Raízes)
-                    # 1. Alvo Principal
-                    target_clean = project.target_url.replace('https://', '').replace('http://', '').split('/')[0]
+                    target_clean = (project.target_url
+                                    .replace('https://', '').replace('http://', '')
+                                    .split('/')[0])
                     seeds = {target_clean}
-                    
-                    # 2. Adiciona APENAS o que está escrito no campo "In Scope" (Manual)
-                    # Isso evita o loop de re-escanear subdomínios já descobertos
                     if project.in_scope:
                         for line in project.in_scope.splitlines():
-                            line = line.strip()
-                            if line:
-                                # Limpa protocolo se houver
-                                clean_manual = line.replace('https://', '').replace('http://', '').split('/')[0]
-                                seeds.add(clean_manual)
-                    
-                    total_seeds = len(seeds)
-                    print(f"[WORKER] Discovery ATIVADO. {total_seeds} sementes raízes: {seeds}")
-                    
+                            c = line.strip().replace('https://', '').replace('http://', '').split('/')[0]
+                            if c:
+                                seeds.add(c)
+
+                    print(f"[WORKER] {len(seeds)} sementes: {seeds}")
                     all_discovered = set()
-                    
-                    # Passo B: Rodar Subfinder/Amass nas sementes raízes
+
                     for idx, seed in enumerate(seeds, 1):
-                        msg = f"1/4 Coletando ({idx}/{total_seeds}): {seed}"
-                        print(f"[WORKER] {msg}")
+                        msg = f"1/4 Coletando ({idx}/{len(seeds)}): {seed}"
                         project.scan_message = msg
                         db.session.commit()
-                        
-                        seed_results = find_subdomains(seed)
-                        all_discovered.update(seed_results)
-                    
-                    # Passo C: Merge Inteligente
-                    # Adicionamos os domínios que já existem no banco à lista de resultados
-                    # Motivo: Para que eles passem pelas fases seguintes (HTTPX/Naabu) mesmo que o Subfinder não os ache hoje.
-                    current_domains_db = Domain.query.filter_by(project_id=project.id).all()
-                    for d in current_domains_db:
-                        all_discovered.add(d.name)
-                    
-                    found_subs = list(all_discovered)
+                        try:
+                            all_discovered.update(find_subdomains(seed))
+                        except Exception as e:
+                            print(f"[WORKER] Subfinder/Amass falhou em {seed}: {e}")
 
+                    for d in Domain.query.filter_by(project_id=project.id).all():
+                        all_discovered.add(d.name)
+                    found_subs = list(all_discovered)
                 else:
-                    # Modo Manual (Sem Discovery)
-                    print("[WORKER] Discovery DESATIVADO. Usando apenas banco de dados.")
+                    print("[WORKER] Discovery DESATIVADO.")
                     project.scan_message = "1/4 Carregando lista de alvos..."
                     db.session.commit()
-                    current_domains = Domain.query.filter_by(project_id=project.id).all()
-                    found_subs = [d.name for d in current_domains]
+                    found_subs = [d.name for d in Domain.query.filter_by(project_id=project.id).all()]
 
-                # --- 2. FILTRAGEM (OUT OF SCOPE) ---
-                final_subs = []
-                for sub in found_subs:
-                    is_blocked = False
-                    for bl in blacklist:
-                        # Regra Wildcard (*)
-                        if fnmatch.fnmatch(sub, bl):
-                            is_blocked = True
-                            break
-                        # Regra Sufixo
-                        if '*' not in bl:
-                            if sub == bl or sub.endswith("." + bl):
-                                is_blocked = True
-                                break
-                    if not is_blocked:
-                        final_subs.append(sub)
+                # 2. Filtragem Out-of-Scope
+                found_subs = [
+                    sub for sub in found_subs
+                    if not any(
+                        fnmatch.fnmatch(sub, bl) or
+                        ('*' not in bl and (sub == bl or sub.endswith('.' + bl)))
+                        for bl in blacklist
+                    )
+                ]
+                print(f"[WORKER] Lista final: {len(found_subs)} domínios.")
 
-                found_subs = final_subs 
-                print(f"[WORKER] Lista final para análise: {len(found_subs)} domínios.")
-                
-                # --- 3. NAABU (PORT SCAN) ---
+                # 3. HTTPX — confirma hosts vivos ANTES do Naabu
                 if found_subs:
-                    project.scan_message = "2/4 Verificando Portas Abertas (Naabu)..."
+                    project.scan_message = f"2/4 Verificando {len(found_subs)} subdomínios (HTTPX)..."
                     db.session.commit()
-                    
-                    temp_subs_file = f"subs_naabu_{project.id}_{uuid.uuid4().hex}.txt"
-                    with open(temp_subs_file, 'w') as f:
-                        f.write("\n".join(found_subs))
-                    
-                    naabu_data = scan_naabu_bulk(temp_subs_file)
-                    if os.path.exists(temp_subs_file): os.remove(temp_subs_file)
-                else:
-                    naabu_data = {}
-
-                # --- 4. HTTPX (LIVE CHECK) ---
-                if found_subs:
-                    project.scan_message = f"3/4 Verificando {len(found_subs)} subdomínios (HTTPX)..."
-                    db.session.commit()
-                    alive_data = check_alive(found_subs)
+                    try:
+                        alive_data = check_alive(found_subs)
+                    except Exception as e:
+                        print(f"[WORKER] HTTPX falhou: {e}")
+                        alive_data = []
                 else:
                     alive_data = []
-                
-                # Mapeamento de dados para acesso rápido
-                status_map = {}
-                tech_map = {}
-                ip_map = {} 
-                url_map = {}
-                
+
+                # 4. Naabu — apenas hosts confirmados pelo HTTPX
+                seen_alive = set()
+                alive_hosts_for_naabu = []
                 for item in alive_data:
-                    clean = item['url'].replace('https://', '').replace('http://', '').split('/')[0].split(':')[0]
-                    status_map[clean] = item['status']
-                    tech_map[clean] = item.get('tech', [])
-                    ip_map[clean] = item.get('ip')
-                    url_map[clean] = item['url'] 
+                    c = item['url'].replace('https://', '').replace('http://', '').split('/')[0].split(':')[0]
+                    if c and c not in seen_alive:
+                        seen_alive.add(c)
+                        alive_hosts_for_naabu.append(c)
 
-                domain_map = {d.name: d for d in Domain.query.filter_by(project_id=project.id).all()}
-                
-                new_count = 0
-                total_paths_found = 0 
+                naabu_data = {}
+                if alive_hosts_for_naabu:
+                    project.scan_message = f"3/4 Escaneando portas em {len(alive_hosts_for_naabu)} hosts (Naabu)..."
+                    db.session.commit()
+                    temp_naabu = f"subs_naabu_{project.id}_{uuid.uuid4().hex}.txt"
+                    try:
+                        with open(temp_naabu, 'w') as f:
+                            f.write("\n".join(alive_hosts_for_naabu))
+                        naabu_data = scan_naabu_bulk(temp_naabu)
+                    except Exception as e:
+                        print(f"[WORKER] Naabu falhou: {e}")
+                    finally:
+                        if os.path.exists(temp_naabu):
+                            os.remove(temp_naabu)
 
-                project.scan_message = "4/4 Processando Alvos (DNS + Fuzzing + SSL Cert Data)..."
+                # Mapas de lookup
+                status_map = {}
+                tech_map   = {}
+                ip_map     = {}
+                url_map    = {}
+                for item in alive_data:
+                    c = item['url'].replace('https://', '').replace('http://', '').split('/')[0].split(':')[0]
+                    status_map[c] = item['status']
+                    tech_map[c]   = item.get('tech', [])
+                    ip_map[c]     = item.get('ip')
+                    url_map[c]    = item['url']
+
+                domain_map  = {d.name: d for d in Domain.query.filter_by(project_id=project.id).all()}
+                new_count   = 0
+                total_paths = 0
+                new_alive_subs = []  # para notificação real-time
+
+                project.scan_message = "4/4 Processando Alvos (DNS + Fuzzing + SSL)..."
                 db.session.commit()
 
-                # --- 5. ATUALIZAÇÃO E FUZZING ---
+                # 5. Atualização, DNS, Fuzzing
                 for sub in found_subs:
                     domain_obj = domain_map.get(sub)
-                    is_new_entry = False
-                    
-                    if not domain_obj:
-                        domain_obj = Domain(name=sub, project_id=project.id)
-                        is_new_entry = True
-                        
-                    if mode == 'baseline':
-                        if not project.vuln_scan_enabled:
-                            domain_obj.scanned_vulns = True
+                    is_new     = domain_obj is None
 
-                    val = status_map.get(sub)
-                    code = int(val) if val is not None else 0
+                    if is_new:
+                        domain_obj = Domain(name=sub, project_id=project.id)
+
+                    if mode == 'baseline' and not project.vuln_scan_enabled:
+                        domain_obj.scanned_vulns = True
+
+                    code = int(status_map[sub]) if status_map.get(sub) is not None else 0
                     domain_obj.status_code = code
-                    
-                    if mode == 'recon' and is_new_entry and code in [200, 201, 202, 204, 301, 302, 307, 308]:
-                        # Pode ser um processo lento, então só roda quando necessário
-                        crt_date = get_first_seen_crtsh(sub)
-                        if crt_date:
-                            domain_obj.creation_date = crt_date
+
+                    if mode == 'recon' and is_new and code in [200, 201, 202, 204, 301, 302, 307, 308]:
+                        try:
+                            crt_date = get_first_seen_crtsh(sub)
+                            if crt_date:
+                                domain_obj.creation_date = crt_date
+                        except Exception as e:
+                            print(f"[WORKER] crt.sh falhou em {sub}: {e}")
 
                     tech_list = tech_map.get(sub, [])
                     if tech_list:
                         domain_obj.technologies = ", ".join(tech_list)
-                    
-                    domain_obj.ip_address = ip_map.get(sub)
-                    domain_obj.open_ports = naabu_data.get(sub)
-                    
-                    # Resolve DNS se ativo ou com porta aberta
-                    if code > 0 or domain_obj.open_ports:
-                        domain_obj.dns_info = run_dig_info(sub)
-                    
-                    # --- LÓGICA DE FUZZING OTIMIZADA ---
-                    should_fuzz = False
-                    
-                    # REGRA 1: Modo Baseline
-                    if mode == 'baseline':
-                        if project.fuzzing_enabled:
-                            should_fuzz = True
-                        
-                        # REGRA 2: Outros Modos (Recon/Full)
-                    else:
-                        if is_new_entry:
-                            should_fuzz = True
-                        # REGRA 3: Scan Manual (Descoberta Off)
-                        elif not project.discovery_enabled:
-                            should_fuzz = True
 
-                    allowed_codes = [200, 201, 202, 204, 301, 302, 307, 308, 403]
-                    
-                    if should_fuzz and code in allowed_codes:
-                        target_url = url_map.get(sub, f"https://{sub}")
-                        print(f"[WORKER] Rodando Fuzzing em: {sub}")
-                        
-                        # CMSeeK
-                        cms_found = scan_cmseek(target_url)
-                        if cms_found:
-                            if domain_obj.technologies:
-                                domain_obj.technologies += f", {cms_found}"
-                            else:
-                                domain_obj.technologies = cms_found
-                        
-                        # FFuf
-                        f_res = scan_ffuf(target_url)
-                        if f_res:
-                            paths_list = [item['raw_path'] for item in f_res]
-                            # Lógica de merge de paths
-                            if len(paths_list) > 15:
-                                subset = paths_list[:15]
-                                subset.append(f"[+{len(paths_list)-15} outros]")
-                                final_str = ", ".join(subset)
-                            else:
-                                final_str = ", ".join(paths_list)
-                            
-                            if domain_obj.discovered_paths:
-                                # Merge simples para não duplicar visualmente
-                                existing_paths = domain_obj.discovered_paths.split(", ")
-                                combined = list(set(existing_paths + final_str.split(", ")))
-                                domain_obj.discovered_paths = ", ".join(combined[:15])
-                            else:
-                                domain_obj.discovered_paths = final_str
-                            
-                            total_paths_found += len(paths_list)
-                    
-                    if is_new_entry:
+                    domain_obj.ip_address = ip_map.get(sub)
+
+                    # Flush para ter domain_obj.id antes de escrever portas
+                    if is_new:
                         db.session.add(domain_obj)
+                        db.session.flush()
                         new_count += 1
-                
+
+                    # Portas (tabela normalizada + campo texto)
+                    port_str = naabu_data.get(sub)
+                    if port_str:
+                        _write_ports(domain_obj, port_str)
+
+                    if code > 0 or domain_obj.open_ports:
+                        try:
+                            domain_obj.dns_info = run_dig_info(sub)
+                        except Exception as e:
+                            print(f"[WORKER] DIG falhou em {sub}: {e}")
+
+                    # Fuzzing
+                    should_fuzz = (
+                        (mode == 'baseline' and project.fuzzing_enabled) or
+                        (mode != 'baseline' and (is_new or not project.discovery_enabled))
+                    )
+                    if should_fuzz and code in [200, 201, 202, 204, 301, 302, 307, 308, 403]:
+                        target_url = url_map.get(sub, f"https://{sub}")
+                        print(f"[WORKER] Fuzzing em: {sub}")
+                        try:
+                            cms = scan_cmseek(target_url)
+                            if cms:
+                                domain_obj.technologies = (
+                                    f"{domain_obj.technologies}, {cms}"
+                                    if domain_obj.technologies else cms
+                                )
+                        except Exception as e:
+                            print(f"[WORKER] CMSeeK falhou em {sub}: {e}")
+
+                        try:
+                            f_res = scan_ffuf(target_url)
+                            if f_res:
+                                paths_list   = [item['raw_path'] for item in f_res]
+                                subset       = paths_list[:15]
+                                if len(paths_list) > 15:
+                                    subset.append(f"[+{len(paths_list) - 15} outros]")
+                                new_paths_str = ", ".join(subset)
+                                if domain_obj.discovered_paths:
+                                    combined = list(set(
+                                        domain_obj.discovered_paths.split(", ") +
+                                        new_paths_str.split(", ")
+                                    ))
+                                    domain_obj.discovered_paths = ", ".join(combined[:15])
+                                else:
+                                    domain_obj.discovered_paths = new_paths_str
+                                total_paths += len(paths_list)
+                        except Exception as e:
+                            print(f"[WORKER] FFuf falhou em {sub}: {e}")
+
+                    # Marca novos subs vivos para notificação
+                    if is_new and code in [200, 201, 202, 204, 301, 302, 307, 308, 403]:
+                        new_alive_subs.append(sub)
+
                 db.session.commit()
-                
-                # --- MÉTRICAS HTTP ---
+
+                # Notificação real-time (novos alvos vivos, durante o scan)
+                if new_alive_subs and mode in ['recon', 'full']:
+                    try:
+                        preview = new_alive_subs[:10]
+                        extras  = len(new_alive_subs) - len(preview)
+                        body    = "\n".join(f"• `{s}`" for s in preview)
+                        if extras > 0:
+                            body += f"\n• _(+{extras} mais)_"
+                        send_discord_embed(
+                            title=f"🆕 Novos Alvos Descobertos: {project.name}",
+                            description=f"**{len(new_alive_subs)}** novos subdomínios ativos.\n\n{body}",
+                            fields=[
+                                {"name": "🔍 Modo",       "value": mode,                   "inline": True},
+                                {"name": "🌐 Novos Vivos", "value": str(len(new_alive_subs)), "inline": True},
+                            ],
+                            color_hex=0x1abc9c,
+                        )
+                    except Exception as e:
+                        print(f"[NOTIFY] Notificação real-time: {e}")
+
+                # Métricas HTTP
                 c_2xx = sum(1 for i in alive_data if 200 <= int(i.get('status') or 0) < 300)
                 c_3xx = sum(1 for i in alive_data if 300 <= int(i.get('status') or 0) < 400)
                 c_4xx = sum(1 for i in alive_data if 400 <= int(i.get('status') or 0) < 500)
                 c_5xx = sum(1 for i in alive_data if 500 <= int(i.get('status') or 0) < 600)
 
-                # --- NOTIFICAÇÃO ---
                 try:
-                    recon_fields = [
-                        {"name": "🌐 Total Analisado", "value": str(len(found_subs)), "inline": True},
-                        {"name": "🆕 Novos DB", "value": str(new_count), "inline": True},
-                        {"name": "⚡ Vivos (HTTPX)", "value": str(len(alive_data)), "inline": True},
-                        {"name": "📂 Paths (Fuzzing)", "value": str(total_paths_found), "inline": True}, 
-                        
-                        {"name": "--- Detalhamento HTTP ---", "value": "\u200b", "inline": False},
-                        
-                        {"name": "✅ 200 OK", "value": str(c_2xx), "inline": True},
-                        {"name": "➡️ REDIRECT", "value": str(c_3xx), "inline": True},
-                        {"name": "🚫 CLIENT ERR", "value": str(c_4xx), "inline": True},
-                        {"name": "🔥 SERVER ERR", "value": str(c_5xx), "inline": True}
-                    ]
-                    color = 0x00ff00 if new_count > 0 else 0x3498db
-                    
                     send_discord_embed(
                         title=f"📡 {mode.upper()}: {project.name}",
-                        description=f"Reconhecimento concluído. (Discovery: {'ON' if project.discovery_enabled else 'OFF'})",
-                        fields=recon_fields,
-                        color_hex=color
+                        description=f"Reconhecimento concluído. Discovery: {'ON' if project.discovery_enabled else 'OFF'}",
+                        fields=[
+                            {"name": "🌐 Total",          "value": str(len(found_subs)), "inline": True},
+                            {"name": "🆕 Novos DB",        "value": str(new_count),       "inline": True},
+                            {"name": "⚡ Vivos",           "value": str(len(alive_data)), "inline": True},
+                            {"name": "📂 Paths",           "value": str(total_paths),     "inline": True},
+                            {"name": "---",                "value": "\u200b",             "inline": False},
+                            {"name": "✅ 2xx",             "value": str(c_2xx),           "inline": True},
+                            {"name": "➡️ 3xx",             "value": str(c_3xx),           "inline": True},
+                            {"name": "🚫 4xx",             "value": str(c_4xx),           "inline": True},
+                            {"name": "🔥 5xx",             "value": str(c_5xx),           "inline": True},
+                        ],
+                        color_hex=0x00ff00 if new_count > 0 else 0x3498db,
                     )
                 except Exception as e:
-                    print(f"[NOTIFY ERROR] Erro ao enviar Embed de Recon: {e}")
+                    print(f"[NOTIFY] Embed Recon: {e}")
 
-                should_stop = False
-                if mode == 'recon':
-                    should_stop = True
-                elif mode == 'baseline' and not project.vuln_scan_enabled:
-                    should_stop = True
-
-                if should_stop:
+                total_domains_now = Domain.query.filter_by(project_id=project.id).count()
+                if mode == 'recon' or (mode == 'baseline' and not project.vuln_scan_enabled):
+                    _close_history(history, 'completed',
+                                   new_domains=new_count, total_domains=total_domains_now,
+                                   alive_hosts=len(alive_data),
+                                   summary=json.dumps({
+                                       'c_2xx': c_2xx, 'c_3xx': c_3xx,
+                                       'c_4xx': c_4xx, 'c_5xx': c_5xx,
+                                   }))
                     project.scan_status = "Concluído"
                     project.scan_message = f"Recon finalizado. {new_count} novos ativos."
                     db.session.commit()
-                    print("[WORKER] Fase RECON finalizada com sucesso.")
+                    print("[WORKER] Fase RECON finalizada.")
+                    dispatch_next_pending()
                     return "Recon OK"
-            # ==============================================================================
-            # FASE 2: VULN SCAN (BATCH PROCESSING)
-            # ==============================================================================
-            run_vuln_phase = False
-                        
-            if mode == 'baseline':
-                if project.vuln_scan_enabled:
-                    run_vuln_phase = True
-                else:
-                    print(f"[WORKER] SKIP: Vuln Scan desativado para Baseline no projeto {project.name}.")
 
-            elif mode in ['full', 'vuln']:
-                if mode == 'vuln':
-                    run_vuln_phase = True
-                elif mode == 'full':
-                    if project.vuln_scan_recon_enabled:
-                        run_vuln_phase = True
-                    else:
-                        print(f"[WORKER] SKIP: Vuln Scan desativado para Full/Recon no projeto {project.name}.")
-        
+            # ==============================================================
+            # FASE 2 — VULN SCAN
+            # ==============================================================
+            run_vuln_phase = (
+                (mode == 'baseline' and project.vuln_scan_enabled) or
+                mode == 'vuln' or
+                (mode == 'full' and project.vuln_scan_recon_enabled)
+            )
 
             if run_vuln_phase:
-                print("[WORKER] --- Iniciando Fase VULN SCAN (Batch) ---")
-                
-                # 1. Cria a QUERY BASE (Sem .all() ainda)
-                # Isso cria um objeto de consulta, não a lista de resultados
-                query = Domain.query.filter(
+                print("[WORKER] --- FASE VULN SCAN ---")
+
+                # Escaneia TODOS os domínios vivos não verificados — independente de quando
+                # foram descobertos. Isso garante que o contador "pendentes" sempre zera
+                # ao final do scan de vulnerabilidades.
+                targets = Domain.query.filter(
                     Domain.project_id == project.id,
                     Domain.scanned_vulns == False,
-                    Domain.status_code.in_([200, 201, 202, 204, 301, 302, 307, 308])
-                )
-                
-                # 2. Aplica o filtro de DATA apenas se NÃO for Baseline
-                if mode != 'baseline':
-                    query = query.filter(Domain.first_seen >= project.last_scan_date)
-                
-                # 3. Agora sim executa a query final e pega a lista
-                targets = query.all()
-                
+                    Domain.status_code.in_([200, 201, 202, 204, 301, 302, 307, 308]),
+                ).all()
+
                 if not targets:
-                    print("[WORKER] Nenhum alvo pendente com Status OK para Vuln Scan.")
+                    print("[WORKER] Nenhum alvo pendente para Vuln Scan.")
+                    # Marca todos os demais como verificados para zerar o contador
+                    Domain.query.filter(
+                        Domain.project_id == project.id,
+                        Domain.scanned_vulns == False,
+                    ).update({Domain.scanned_vulns: True}, synchronize_session=False)
+                    db.session.commit()
                     try:
                         send_discord_embed(
                             title=f"💤 Scan Vuln: {project.name}",
-                            description="Scan finalizado sem ações.",
-                            fields=[
-                                {"name": "Status", "value": "Nenhum alvo novo", "inline": True},
-                                {"name": "Detalhe", "value": "Todos os domínios ativos já foram verificados anteriormente.", "inline": False}
-                            ],
-                            color_hex=0x95a5a6 # Cinza (Info/Neutro)
+                            description="Nenhum alvo novo para escanear.",
+                            fields=[{"name": "Status", "value": "Todos já verificados", "inline": True}],
+                            color_hex=0x95a5a6,
                         )
                     except Exception as e:
-                        print(f"[NOTIFY ERROR] Erro ao enviar Embed: {e}")
-                    # ----------------------------------------
+                        print(f"[NOTIFY] {e}")
 
+                    _close_history(history, 'completed',
+                                   total_domains=Domain.query.filter_by(project_id=project.id).count())
                     project.scan_status = "Concluído"
                     project.scan_message = "Nenhum alvo válido pendente."
                     db.session.commit()
+                    dispatch_next_pending()
                     return "Scan Finalizado (Sem novos alvos)"
 
-                print(f"[WORKER] Alvos qualificados para Vuln Scan: {len(targets)}")
+                print(f"[WORKER] Alvos: {len(targets)}")
 
                 target_file = f"targets_proj_{project.id}.txt"
                 with open(target_file, "w") as f:
                     for d in targets:
                         f.write(f"https://{d.name}\n")
-                
+
                 try:
-                    # 1. Nuclei
-                    project.scan_message = f"Rodando Nuclei em Lote ({len(targets)} domínios)..."
+                    project.scan_message = f"Rodando Nuclei ({len(targets)} domínios)..."
                     db.session.commit()
                     nuclei_vulns = scan_nuclei_bulk(target_file)
                     process_vulns(nuclei_vulns, project.id)
 
-                    # 2. XSS + GAU
-                    project.scan_message = f"Rodando Katana + GAU + Dalfox..."
+                    project.scan_message = "Rodando Katana + GAU + Dalfox..."
                     db.session.commit()
                     xss_vulns = scan_crawling_xss_bulk(target_file)
                     process_vulns(xss_vulns, project.id)
 
-                    # 3. SQLMap
                     sqli_vulns = scan_sqlmap_bulk(target_file)
                     process_vulns(sqli_vulns, project.id)
 
-                    # 4. Atualizar Status Final
-                    print("[WORKER] Marcando domínios como escaneados...")
                     for d in targets:
                         d.scanned_vulns = True
-                    
+
+                    # Marca também domínios não-vivos que nunca serão escaneados
+                    # para zerar completamente o contador "pendentes" do card
+                    Domain.query.filter(
+                        Domain.project_id == project.id,
+                        Domain.scanned_vulns == False,
+                    ).update({Domain.scanned_vulns: True}, synchronize_session=False)
+
                     total_vulns = len(nuclei_vulns) + len(xss_vulns) + len(sqli_vulns)
-                    
-                    # --- NOTIFICAÇÃO DISCORD (VULNERABILIDADES) ---
+
                     try:
                         if total_vulns > 0:
-                            vuln_fields = [
-                                {"name": "🔥 Total", "value": str(total_vulns), "inline": False},
-                                {"name": "☢️ Nuclei", "value": str(len(nuclei_vulns)), "inline": True},
-                                {"name": "⚠️ XSS/Arquivos", "value": str(len(xss_vulns)), "inline": True},
-                                {"name": "💉 SQLi", "value": str(len(sqli_vulns)), "inline": True}
-                            ]
                             send_discord_embed(
                                 title=f"🚨 VULNERABILIDADES: {project.name}",
-                                description="Falhas de segurança encontradas.",
-                                fields=vuln_fields,
-                                color_hex=0xff0000
+                                description="Falhas encontradas.",
+                                fields=[
+                                    {"name": "🔥 Total",   "value": str(total_vulns),       "inline": False},
+                                    {"name": "☢️ Nuclei", "value": str(len(nuclei_vulns)),  "inline": True},
+                                    {"name": "⚠️ XSS",   "value": str(len(xss_vulns)),     "inline": True},
+                                    {"name": "💉 SQLi",   "value": str(len(sqli_vulns)),    "inline": True},
+                                ],
+                                color_hex=0xff0000,
                             )
                         else:
                             send_discord_embed(
                                 title=f"✅ Scan Limpo: {project.name}",
-                                description="Nenhuma vulnerabilidade crítica detectada.",
+                                description="Nenhuma vulnerabilidade crítica.",
                                 fields=[{"name": "Status", "value": "Seguro", "inline": True}],
-                                color_hex=0x00ff00
+                                color_hex=0x00ff00,
                             )
                     except Exception as e:
-                        print(f"[NOTIFY ERROR] Erro ao enviar Embed: {e}")
+                        print(f"[NOTIFY] Embed vuln: {e}")
+
+                    total_domains_now = Domain.query.filter_by(project_id=project.id).count()
+                    _close_history(history, 'completed',
+                                   new_vulns=total_vulns,
+                                   total_domains=total_domains_now,
+                                   summary=json.dumps({
+                                       'nuclei': len(nuclei_vulns),
+                                       'xss': len(xss_vulns),
+                                       'sqli': len(sqli_vulns),
+                                   }))
 
                     project.scan_status = "Concluído"
                     project.scan_message = f"Finalizado. {total_vulns} vulns."
                     db.session.commit()
-                    print(f"[WORKER] Tarefa finalizada. Total Vulns: {total_vulns}")
+                    print(f"[WORKER] Task finalizada. Vulns: {total_vulns}")
+                    dispatch_next_pending()
 
                 finally:
-                    if os.path.exists(target_file): os.remove(target_file)
+                    if os.path.exists(target_file):
+                        os.remove(target_file)
 
         except Exception as e:
             db.session.rollback()
-            print(f"[WORKER CRITICAL ERROR] {traceback.format_exc()}")
-            project_check = Project.query.get(project_id)
-            if project_check:
-                project_check.scan_status = "Erro"
-                project_check.scan_message = f"Erro: {str(e)[:100]}"
+            print(f"[WORKER CRITICAL] {traceback.format_exc()}")
+            try:
+                _close_history(history, 'error',
+                               summary=json.dumps({'error': str(e)[:500]}))
+            except Exception:
+                pass
+            proj = Project.query.get(project_id)
+            if proj:
+                proj.scan_status = "Erro"
+                proj.scan_message = f"Erro: {str(e)[:100]}"
                 db.session.commit()
+            try:
+                dispatch_next_pending()
+            except Exception:
+                pass
+
+
+# ---------------------------------------------------------------------------
+# Dispatcher — acorda o próximo projeto pendente quando um slot abre
+# ---------------------------------------------------------------------------
+
+def dispatch_next_pending():
+    """
+    Chamado ao final de cada scan para verificar se há projetos
+    com status 'Na fila' mas sem task_id (aguardando slot).
+    Despacha o próximo da fila se houver slot disponível.
+    """
+    from celery import uuid as celery_uuid
+
+    # Conta quantos projetos estão ATIVAMENTE rodando agora
+    ativos = Project.query.filter(
+        Project.scan_status == 'Rodando'
+    ).count()
+
+    MAX_CONCURRENT = 2
+
+    if ativos >= MAX_CONCURRENT:
+        print(f"[QUEUE] {ativos} projetos ativos, limite atingido. Aguardando.")
+        return
+
+    # Pega o próximo projeto em fila SEM task_id (slot pendente)
+    proximo = Project.query.filter(
+        Project.scan_status == 'Na fila',
+        Project.current_task_id == None
+    ).order_by(Project.id.asc()).first()
+
+    if not proximo:
+        print("[QUEUE] Fila global vazia — nenhum projeto pendente.")
+        return
+
+    task_id = celery_uuid()
+    proximo.current_task_id = task_id
+    proximo.scan_message = 'Aguardando worker...'
+    db.session.flush()
+    run_scan_task.apply_async(args=[proximo.id, 'full'], task_id=task_id)
+    db.session.commit()
+    print(f"[QUEUE] Próximo projeto despachado: {proximo.name} → task {task_id}")
+
+
+# ---------------------------------------------------------------------------
+# process_vulns
+# ---------------------------------------------------------------------------
 
 def process_vulns(vuln_list, project_id):
-    """Mapeia URLs vulneráveis de volta para o Domain ID"""
-    if not vuln_list: return
-    
-    print(f"[WORKER PROCESSING] Mapeando {len(vuln_list)} vulnerabilidades...")
-    
-    domain_cache = {}
-    all_domains = Domain.query.filter_by(project_id=project_id).all()
-    for d in all_domains:
-        domain_cache[d.name] = d.id
-        
-    count_saved = 0
-    count_dupe = 0
-    
+    """Mapeia URLs vulneráveis para o Domain ID e persiste as vulnerabilidades."""
+    if not vuln_list:
+        return
+
+    print(f"[WORKER] Mapeando {len(vuln_list)} vulnerabilidades...")
+    domain_cache = {d.name: d.id for d in Domain.query.filter_by(project_id=project_id).all()}
+    saved = dupes = 0
+
     for v in vuln_list:
         host_url = v.get('host', '')
-        if not host_url: continue
+        if not host_url:
+            continue
 
-        clean_host = host_url.replace('https://', '').replace('http://', '').split('/')[0].split(':')[0]
-        
-        dom_id = domain_cache.get(clean_host)
-        
+        clean = host_url.replace('https://', '').replace('http://', '').split('/')[0].split(':')[0]
+        dom_id = domain_cache.get(clean)
+
         if not dom_id:
             try:
-                new_dynamic_domain = Domain(
-                    name=clean_host, 
-                    project_id=project_id,
-                    scanned_vulns=True, 
-                    status_code=200,
-                    technologies="Descoberto via Vuln Scan"
-                )
-                db.session.add(new_dynamic_domain)
-                db.session.commit()
-                dom_id = new_dynamic_domain.id
-                domain_cache[clean_host] = dom_id
-            except Exception:
+                nd = Domain(name=clean, project_id=project_id,
+                            scanned_vulns=True, status_code=200,
+                            technologies="Descoberto via Vuln Scan")
+                db.session.add(nd)
+                db.session.flush()
+                dom_id = nd.id
+                domain_cache[clean] = dom_id
+            except Exception as e:
+                print(f"[WORKER] Falha ao criar domínio {clean}: {e}")
                 continue
-                
+
         if dom_id:
-            exists = Vulnerability.query.filter_by(domain_id=dom_id, description=v['description']).first()
+            exists = Vulnerability.query.filter_by(
+                domain_id=dom_id, description=v['description']
+            ).first()
             if not exists:
-                new_vuln = Vulnerability(
+                db.session.add(Vulnerability(
                     tool=v['tool'], severity=v['severity'],
-                    description=v['description'], domain_id=dom_id
-                )
-                db.session.add(new_vuln)
-                count_saved += 1
+                    description=v['description'], domain_id=dom_id,
+                ))
+                saved += 1
             else:
-                count_dupe += 1
-    
+                dupes += 1
+
     db.session.commit()
-    print(f"[WORKER PROCESSING] Salvas: {count_saved} | Duplicadas: {count_dupe}")
+    print(f"[WORKER] Salvas: {saved} | Duplicadas: {dupes}")
+
+
+# ---------------------------------------------------------------------------
+# Scan Diário
+# ---------------------------------------------------------------------------
 
 @celery.task
 def run_daily_scan(mode='full'):
-    from app import create_app
-    from .models import Project, SystemState
-    from . import db
-    from datetime import date
+    from .models import SystemState
 
-    app = create_app()
+    app = _get_app()
     with app.app_context():
         today = date.today()
 
-        # --- LOCK DIÁRIO GLOBAL ---
         state = SystemState.query.get(1)
-
         if not state:
             state = SystemState(id=1)
             db.session.add(state)
             db.session.commit()
 
-        # Se já rodou hoje, ignora qualquer replay do Celery Beat
         if state.last_daily_scan == today:
-            print("🛑 [SCHEDULER] Scan diário já executado hoje. Ignorando.")
+            print("🛑 [SCHEDULER] Scan diário já executado hoje.")
             return
 
-        # Trava execução diária ANTES de qualquer agendamento
         state.last_daily_scan = today
         db.session.commit()
 
-        projects = Project.query.all()
-        for proj in projects:
+        from celery import uuid as celery_uuid
 
-            # --- PROTEÇÃO 1: Status ---
+        for proj in Project.query.all():
             if proj.scan_status == 'Rodando':
                 continue
-
-            # --- PROTEÇÃO 2: Fila ---
             if proj.scan_status == 'Na fila' and proj.current_task_id:
-                print(
-                    f"[SCHEDULER] Pular {proj.name}: "
-                    f"Já está agendado (ID: {proj.current_task_id})."
-                )
+                print(f"[SCHEDULER] Pular {proj.name}: já na fila.")
                 continue
 
-            # --- AGENDAMENTO ---
-            print(f"[SCHEDULER] Agendando {proj.name}...")
-
-            task = run_scan_task.delay(proj.id, mode=mode)
-
-            proj.current_task_id = task.id
+            # Pré-gera task ID e salva ANTES do dispatch (evita race condition)
+            task_id = celery_uuid()
+            proj.current_task_id = task_id
             proj.scan_status = 'Na fila'
             proj.scan_message = 'Aguardando início (Agendado)...'
+            db.session.flush()
+            run_scan_task.apply_async(args=[proj.id, mode], task_id=task_id)
+            print(f"[SCHEDULER] Agendado {proj.name} → task {task_id}")
 
-            db.session.commit()
+        db.session.commit()

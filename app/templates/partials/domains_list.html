@@ -244,4 +244,52 @@
             </tbody>
         </table>
     </div>
+
+    {# ── Paginação ── #}
+    {% if pagination and pagination.pages > 1 %}
+    <nav class="d-flex justify-content-between align-items-center px-3 py-2 border-top bg-light"
+         aria-label="Paginação de domínios">
+        <span class="text-muted small">
+            {{ pagination.total }} domínios —
+            página {{ pagination.page }} de {{ pagination.pages }}
+        </span>
+        <div class="d-flex gap-1">
+            {% if pagination.has_prev %}
+            <button class="btn btn-sm btn-outline-secondary"
+                    hx-get="{{ url_for('main.project_domains_part', id=project.id) }}?page={{ pagination.prev_num }}"
+                    hx-target="#domains-content"
+                    hx-swap="innerHTML"
+                    aria-label="Página anterior">
+                <i class="fas fa-chevron-left" aria-hidden="true"></i>
+            </button>
+            {% endif %}
+
+            {% for p in pagination.iter_pages(left_edge=1, right_edge=1, left_current=2, right_current=2) %}
+                {% if p %}
+                <button class="btn btn-sm {{ 'btn-primary' if p == pagination.page else 'btn-outline-secondary' }}"
+                        hx-get="{{ url_for('main.project_domains_part', id=project.id) }}?page={{ p }}"
+                        hx-target="#domains-content"
+                        hx-swap="innerHTML"
+                        aria-label="Página {{ p }}"
+                        {% if p == pagination.page %}aria-current="page"{% endif %}>
+                    {{ p }}
+                </button>
+                {% else %}
+                <span class="btn btn-sm btn-outline-secondary disabled">…</span>
+                {% endif %}
+            {% endfor %}
+
+            {% if pagination.has_next %}
+            <button class="btn btn-sm btn-outline-secondary"
+                    hx-get="{{ url_for('main.project_domains_part', id=project.id) }}?page={{ pagination.next_num }}"
+                    hx-target="#domains-content"
+                    hx-swap="innerHTML"
+                    aria-label="Próxima página">
+                <i class="fas fa-chevron-right" aria-hidden="true"></i>
+            </button>
+            {% endif %}
+        </div>
+    </nav>
+    {% endif %}
+
 </div>

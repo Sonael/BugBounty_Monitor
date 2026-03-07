@@ -15,9 +15,40 @@
                 <i class="fas fa-arrow-left me-2" aria-hidden="true"></i>Voltar para Dashboard
             </a>
 
-            <div role="group" aria-label="Ações do projeto">
+            <div class="d-flex gap-2" role="group" aria-label="Ações do projeto">
+
+                <!-- Export Dropdown -->
+                <div class="dropdown">
+                    <button class="btn btn-outline-success btn-sm fw-bold shadow-sm dropdown-toggle"
+                            type="button"
+                            data-bs-toggle="dropdown"
+                            aria-label="Exportar dados">
+                        <i class="fas fa-download me-2" aria-hidden="true"></i>Exportar
+                    </button>
+                    <ul class="dropdown-menu shadow border-0">
+                        <li>
+                            <a class="dropdown-item" href="{{ url_for('main.export_project', id=project.id, fmt='json') }}">
+                                <i class="fas fa-code me-2 text-warning"></i>Exportar JSON
+                            </a>
+                        </li>
+                        <li>
+                            <a class="dropdown-item" href="{{ url_for('main.export_project', id=project.id, fmt='csv') }}">
+                                <i class="fas fa-table me-2 text-success"></i>Exportar CSV
+                            </a>
+                        </li>
+                        <li><hr class="dropdown-divider"></li>
+                        <li>
+                            <form action="{{ url_for('main.mark_all_scanned', id=project.id) }}" method="POST" class="px-3 py-1">
+                                <button type="submit" class="btn btn-sm btn-outline-secondary w-100 text-start">
+                                    <i class="fas fa-check-double me-2 text-muted"></i>Marcar todos como verificados
+                                </button>
+                            </form>
+                        </li>
+                    </ul>
+                </div>
+
                 <button type="button" 
-                        class="btn btn-outline-primary btn-sm fw-bold shadow-sm me-2"
+                        class="btn btn-outline-primary btn-sm fw-bold shadow-sm"
                         data-bs-toggle="modal" 
                         data-bs-target="#editModal"
                         aria-label="Editar projeto">
@@ -113,16 +144,28 @@
                             aria-controls="vulns"
                             aria-selected="false">
                         <i class="fas fa-bug me-2" aria-hidden="true"></i>Vulnerabilidades
-                        
-                        {% set initial_vulns = project.domains | map(attribute='vulnerabilities') | sum(start=[]) | length %}
-                        
                         <span class="badge bg-danger ms-2 rounded-pill"
                               hx-get="{{ url_for('main.count_vulns', id=project.id) }}" 
-                              hx-trigger="{{ refresh_rate }}"
+                              hx-trigger="load, {{ refresh_rate }}"
                               hx-swap="innerHTML"
                               aria-live="polite">
-                            {{ initial_vulns }}
+                            …
                         </span>
+                    </button>
+                </li>
+
+                <!-- History Tab -->
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link fw-bold border"
+                            id="history-tab"
+                            data-bs-toggle="pill"
+                            data-bs-target="#history"
+                            type="button"
+                            role="tab"
+                            aria-controls="history"
+                            aria-selected="false"
+                            onclick="loadHistory()">
+                        <i class="fas fa-history me-2" aria-hidden="true"></i>Histórico
                     </button>
                 </li>
             </ul>
@@ -133,28 +176,19 @@
         <div class="tab-content" id="projectTabsContent">
 
             <!-- Vulnerabilities Tab Content -->
-            <div class="tab-pane fade show" 
-                 id="vulns" 
-                 role="tabpanel" 
+            <div class="tab-pane fade show"
+                 id="vulns"
+                 role="tabpanel"
                  aria-labelledby="vulns-tab"
                  tabindex="0">
-                <div class="table-responsive rounded border" style="max-height: 600px; overflow-y: auto;">
-                    <table class="table table-custom table-hover align-middle mb-0">
-                        <thead style="position: sticky; top: 0; z-index: 10;">
-                            <tr>
-                                <th class="text-center bg-light" style="width: 100px;" scope="col">Nível</th>
-                                <th class="bg-light" style="width: 120px;" scope="col">Ferramenta</th>
-                                <th class="bg-light" scope="col">Detalhes da Falha</th>
-                                <th class="bg-light" style="width: 200px;" scope="col">Local</th>
-                            </tr>
-                        </thead>
-                        <tbody id="vuln-table-body" 
-                               hx-get="{{ url_for('main.project_vulns_part', id=project.id) }}"
-                               hx-trigger="{{ refresh_rate }}" 
-                               hx-swap="innerHTML">
-                            {% include 'partials/vulns_list.html' %}
-                        </tbody>
-                    </table>
+                <div id="vuln-content"
+                     hx-get="{{ url_for('main.project_vulns_part', id=project.id) }}"
+                     hx-trigger="load, {{ refresh_rate }}"
+                     hx-swap="innerHTML">
+                    <div class="text-center py-5 text-muted">
+                        <div class="spinner-border text-primary mb-3"></div>
+                        <p>Carregando vulnerabilidades...</p>
+                    </div>
                 </div>
             </div>
 
@@ -259,6 +293,43 @@
                     </div>
                 </div>
             </div>
+
+            <!-- History Tab Content -->
+            <div class="tab-pane fade"
+                 id="history"
+                 role="tabpanel"
+                 aria-labelledby="history-tab"
+                 tabindex="0">
+
+                <div id="history-loading" class="text-center py-5 text-muted">
+                    <div class="spinner-border text-primary mb-3"></div>
+                    <p>Carregando histórico...</p>
+                </div>
+
+                <div id="history-content" class="d-none">
+                    <div class="table-responsive rounded border">
+                        <table class="table table-hover align-middle mb-0">
+                            <thead class="table-light">
+                                <tr>
+                                    <th>Data</th>
+                                    <th>Modo</th>
+                                    <th>Status</th>
+                                    <th class="text-center">Duração</th>
+                                    <th class="text-center">Novos Domínios</th>
+                                    <th class="text-center">Hosts Vivos</th>
+                                    <th class="text-center">Novas Vulns</th>
+                                </tr>
+                            </thead>
+                            <tbody id="history-tbody"></tbody>
+                        </table>
+                    </div>
+                    <p id="history-empty" class="text-center text-muted py-4 d-none">
+                        <i class="fas fa-inbox fa-2x mb-2 d-block opacity-50"></i>
+                        Nenhum scan registrado ainda.
+                    </p>
+                </div>
+            </div>
+
         </div>
     </div>
 </article>
@@ -754,5 +825,69 @@
             }
         }
     });
+
+    // ── Histórico de Scans ──────────────────────────────────────────────────
+    let historyLoaded = false;
+
+    window.loadHistory = function() {
+        if (historyLoaded) return;
+        historyLoaded = true;
+
+        const projectId = {{ project.id }};
+        const tbody = document.getElementById('history-tbody');
+        const loading = document.getElementById('history-loading');
+        const content = document.getElementById('history-content');
+        const empty = document.getElementById('history-empty');
+
+        fetch(`/api/project/${projectId}/history`)
+            .then(r => r.json())
+            .then(data => {
+                loading.classList.add('d-none');
+                content.classList.remove('d-none');
+
+                if (!data.length) {
+                    empty.classList.remove('d-none');
+                    return;
+                }
+
+                const statusBadge = (s) => {
+                    const map = {
+                        completed: '<span class="badge bg-success">Concluído</span>',
+                        error:     '<span class="badge bg-danger">Erro</span>',
+                        stopped:   '<span class="badge bg-warning text-dark">Parado</span>',
+                        running:   '<span class="badge bg-primary">Rodando</span>',
+                    };
+                    return map[s] || `<span class="badge bg-secondary">${s}</span>`;
+                };
+
+                const modeBadge = (m) => {
+                    const map = {
+                        full:     '<span class="badge bg-primary bg-opacity-10 text-primary border border-primary">Full</span>',
+                        recon:    '<span class="badge bg-info bg-opacity-10 text-info border border-info">Recon</span>',
+                        vuln:     '<span class="badge bg-danger bg-opacity-10 text-danger border border-danger">Vuln</span>',
+                        baseline: '<span class="badge bg-secondary bg-opacity-10 text-secondary border border-secondary">Baseline</span>',
+                    };
+                    return map[m] || `<span class="badge bg-light text-dark">${m}</span>`;
+                };
+
+                tbody.innerHTML = data.map(h => {
+                    const dt = h.started_at ? new Date(h.started_at).toLocaleString('pt-BR') : '—';
+                    const dur = h.duration_minutes !== null ? `${h.duration_minutes}min` : '—';
+                    return `<tr>
+                        <td class="font-monospace small text-muted">${dt}</td>
+                        <td>${modeBadge(h.mode)}</td>
+                        <td>${statusBadge(h.status)}</td>
+                        <td class="text-center">${dur}</td>
+                        <td class="text-center fw-bold ${h.new_domains > 0 ? 'text-success' : ''}">${h.new_domains ?? 0}</td>
+                        <td class="text-center">${h.alive_hosts ?? 0}</td>
+                        <td class="text-center fw-bold ${h.new_vulns > 0 ? 'text-danger' : ''}">${h.new_vulns ?? 0}</td>
+                    </tr>`;
+                }).join('');
+            })
+            .catch(err => {
+                loading.innerHTML = `<p class="text-danger"><i class="fas fa-times-circle me-2"></i>Erro ao carregar histórico.</p>`;
+                console.error(err);
+            });
+    };
 </script>
 {% endblock %}

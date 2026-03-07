@@ -78,7 +78,7 @@
 
 <!-- Statistics Section -->
 <div hx-get="{{ url_for('main.htmx_stats') }}" 
-     hx-trigger="load, every 3s" 
+     hx-trigger="load, every 10s" 
      hx-swap="innerHTML"
      role="region"
      aria-label="Estatísticas em tempo real">
@@ -242,6 +242,7 @@
          tabindex="0">
         <div class="row">
             {% for project in projects %}
+            {% set card_stats = cards_stats.get(project.id, {}) %}
             {% include 'partials/dashboard_card.html' %}
 
             <!-- Edit Modal for Each Project -->

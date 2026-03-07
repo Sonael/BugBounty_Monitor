@@ -1,150 +1,118 @@
-{% set pendentes = project.domains | selectattr('scanned_vulns', 'equalto', False) | selectattr('status_code', 'in', [200, 201, 202, 204, 301, 302, 307, 308]) | list | length %}
-{% set count_2xx = project.domains | selectattr('status_code', 'ge', 200) | selectattr('status_code', 'lt', 300) | list | length %}
-{% set count_3xx = project.domains | selectattr('status_code', 'ge', 300) | selectattr('status_code', 'lt', 400) | list | length %}
-{% set count_4xx = project.domains | selectattr('status_code', 'ge', 400) | selectattr('status_code', 'lt', 500) | list | length %}
-{% set count_5xx = project.domains | selectattr('status_code', 'ge', 500) | list | length %}
+{# ─────────────────────────────────────────────────────────────────────────
+   dashboard_card.html
+   Usa card_stats pré-calculado via SQL na rota — sem iterar project.domains.
+   card_stats = { total, c2xx, c3xx, c4xx, c5xx, pendentes, vulns }
+   ───────────────────────────────────────────────────────────────────────── #}
 
-{% set ns = namespace(total_vulns=0) %}
-{% for d in project.domains %}
-    {% set ns.total_vulns = ns.total_vulns + d.vulnerabilities|length %}
-{% endfor %}
+{% set cs = card_stats if card_stats is defined else {} %}
+{% set total       = cs.get('total',     0) if cs else 0 %}
+{% set count_2xx   = cs.get('c2xx',      0) if cs else 0 %}
+{% set count_3xx   = cs.get('c3xx',      0) if cs else 0 %}
+{% set count_4xx   = cs.get('c4xx',      0) if cs else 0 %}
+{% set count_5xx   = cs.get('c5xx',      0) if cs else 0 %}
+{% set pendentes   = cs.get('pendentes', 0) if cs else 0 %}
+{% set total_vulns = cs.get('vulns',     0) if cs else 0 %}
 
-{% set refresh_rate = 'every 3s' if project.scan_status in ['Rodando', 'Na fila'] else 'every 60s' %}
+{% set refresh_rate = 'every 5s' if project.scan_status in ['Rodando', 'Na fila'] else 'every 120s' %}
 
-<div class="col-md-4 mb-4" 
+<div class="col-md-4 mb-4"
      id="project-card-{{ project.id }}"
      hx-get="{{ url_for('main.project_card_part', id=project.id) }}"
-     hx-trigger="{{ refresh_rate }}" 
+     hx-trigger="{{ refresh_rate }}"
      hx-swap="outerHTML">
-     
+
     <article class="card h-100 project-card border-0 shadow-sm position-relative">
         <div class="card-body p-4 d-flex flex-column h-100">
-            
-            <!-- Header: Status Badge & Actions -->
+
             <header class="d-flex justify-content-between align-items-start mb-3">
                 {% if project.scan_status == 'Rodando' %}
                     <span class="badge bg-primary bg-opacity-10 text-primary border border-primary rounded-pill animate-pulse" role="status">
-                        <i class="fas fa-sync fa-spin me-1" aria-hidden="true"></i>
-                        Rodando
+                        <i class="fas fa-sync fa-spin me-1" aria-hidden="true"></i>Rodando
                     </span>
-
                 {% elif project.scan_status == 'Na fila' %}
                     <span class="badge bg-secondary bg-opacity-10 text-secondary border border-secondary rounded-pill animate-pulse" role="status">
-                        <i class="fas fa-hourglass-half me-1" aria-hidden="true"></i>
-                        Na fila
+                        <i class="fas fa-hourglass-half me-1" aria-hidden="true"></i>Na fila
                     </span>
-
                 {% elif project.scan_status == 'Erro' %}
                     <span class="badge bg-danger bg-opacity-10 text-danger border border-danger rounded-pill" role="status">
-                         <i class="fas fa-exclamation-circle me-1" aria-hidden="true"></i>
-                         Erro
+                        <i class="fas fa-exclamation-circle me-1" aria-hidden="true"></i>Erro
                     </span>
                 {% else %}
                     <span class="badge bg-light text-secondary border rounded-pill" role="status">
                         {% if project.scan_status == 'Concluído' %}
-                             <i class="fas fa-check-circle me-1 text-success" aria-hidden="true"></i>
-                             Pronto
+                            <i class="fas fa-check-circle me-1 text-success" aria-hidden="true"></i>Pronto
                         {% else %}
-                             <i class="fas fa-pause-circle me-1" aria-hidden="true"></i>
-                             Parado
+                            <i class="fas fa-pause-circle me-1" aria-hidden="true"></i>Parado
                         {% endif %}
                     </span>
                 {% endif %}
 
-                <div class="d-flex gap-2" role="group" aria-label="Ações do projeto">
-                    <button 
-                        class="btn btn-link text-muted p-0 hover-primary" 
-                        data-bs-toggle="modal" 
-                        data-bs-target="#editModal{{ project.id }}" 
-                        title="Editar Projeto"
-                        aria-label="Editar projeto {{ project.name }}">
+                <div class="d-flex gap-2" role="group">
+                    <button class="btn btn-link text-muted p-0 hover-primary"
+                            data-bs-toggle="modal" data-bs-target="#editModal{{ project.id }}"
+                            title="Editar" aria-label="Editar {{ project.name }}">
                         <i class="fas fa-edit" aria-hidden="true"></i>
                     </button>
-                    <button 
-                        class="btn btn-link text-muted p-0 hover-danger" 
-                        data-bs-toggle="modal" 
-                        data-bs-target="#deleteModal{{ project.id }}" 
-                        title="Excluir Projeto"
-                        aria-label="Excluir projeto {{ project.name }}">
+                    <button class="btn btn-link text-muted p-0 hover-danger"
+                            data-bs-toggle="modal" data-bs-target="#deleteModal{{ project.id }}"
+                            title="Excluir" aria-label="Excluir {{ project.name }}">
                         <i class="fas fa-trash-alt" aria-hidden="true"></i>
                     </button>
                 </div>
             </header>
 
-            <!-- Project Title -->
             <h2 class="card-title fw-bold text-dark mb-1 h5">{{ project.name }}</h2>
-            
-            <!-- Status Message or Target URL -->
-            {% if project.scan_status == 'Rodando' or project.scan_status == 'Na fila' %}
-                <p class="text-primary small mb-4 fw-bold text-truncate">
-                     {{ project.scan_message }}
-                </p>
+
+            {% if project.scan_status in ['Rodando', 'Na fila'] %}
+                <p class="text-primary small mb-4 fw-bold text-truncate">{{ project.scan_message }}</p>
             {% else %}
                 <p class="text-muted font-monospace small mb-4">
                     <i class="fas fa-globe me-1 opacity-50" aria-hidden="true"></i>
                     {{ project.target_url }}
                 </p>
             {% endif %}
-            
-            <!-- Pending Targets Alert -->
+
             {% if pendentes > 0 %}
             <div class="alert alert-warning d-flex align-items-center p-2 small border-warning bg-warning bg-opacity-10 mb-3 rounded" role="alert">
                 <i class="fas fa-bell me-2 text-warning animate-swing" aria-hidden="true"></i>
                 <div class="fw-bold text-dark lh-1">
                     {{ pendentes }} {{ 'novo subdomínio' if pendentes == 1 else 'novos subdomínios' }} (Alvos Válidos)!<br>
-                    <span class="fw-normal text-muted" style="font-size: 0.8em;">{{ 'Precisa' if pendentes == 1 else 'Precisam' }} de scan</span>
+                    <span class="fw-normal text-muted" style="font-size:0.8em;">{{ 'Precisa' if pendentes == 1 else 'Precisam' }} de scan</span>
                 </div>
             </div>
             {% endif %}
-            
-            <!-- Footer: Stats & Action Button -->
+
             <footer class="d-flex justify-content-between align-items-center pt-3 border-top mt-auto">
                 <div class="d-flex align-items-center flex-wrap gap-2">
-                    <div class="small text-muted fw-bold" title="Total de subdomínios descobertos">
-                        <i class="fas fa-sitemap me-1" aria-hidden="true"></i>
-                        <span>{{ project.domains|length }}</span>
+                    <div class="small text-muted fw-bold" title="Total de subdomínios">
+                        <i class="fas fa-sitemap me-1" aria-hidden="true"></i>{{ total }}
                     </div>
-                    
-                    {% if count_2xx > 0 or count_3xx > 0 or count_4xx > 0 or count_5xx > 0 or ns.total_vulns > 0 %}
+
+                    {% if count_2xx > 0 or count_3xx > 0 or count_4xx > 0 or count_5xx > 0 or total_vulns > 0 %}
                         <div class="text-muted opacity-25" aria-hidden="true">|</div>
                     {% endif %}
-                    
-                    {% if ns.total_vulns > 0 %}
-                    <span class="badge bg-danger rounded-pill" title="Total de Vulnerabilidades">
-                        <i class="fas fa-bug" aria-hidden="true"></i>
-                        {{ ns.total_vulns }}
+
+                    {% if total_vulns > 0 %}
+                    <span class="badge bg-danger rounded-pill" title="Vulnerabilidades">
+                        <i class="fas fa-bug"></i> {{ total_vulns }}
                     </span>
                     {% endif %}
-                    
                     {% if count_2xx > 0 %}
-                    <span class="badge bg-success bg-opacity-10 text-success border border-success rounded-pill" title="Status 2xx (Sucesso)">
-                        2xx: {{ count_2xx }}
-                    </span>
+                    <span class="badge bg-success bg-opacity-10 text-success border border-success rounded-pill">2xx: {{ count_2xx }}</span>
                     {% endif %}
-                    
                     {% if count_3xx > 0 %}
-                    <span class="badge bg-info bg-opacity-10 text-info border border-info rounded-pill" title="Status 3xx (Redirects)">
-                        3xx: {{ count_3xx }}
-                    </span>
+                    <span class="badge bg-info bg-opacity-10 text-info border border-info rounded-pill">3xx: {{ count_3xx }}</span>
                     {% endif %}
-                    
                     {% if count_4xx > 0 %}
-                    <span class="badge bg-warning bg-opacity-10 text-warning border border-warning rounded-pill" title="Status 4xx (Client Error)">
-                        4xx: {{ count_4xx }}
-                    </span>
+                    <span class="badge bg-warning bg-opacity-10 text-warning border border-warning rounded-pill">4xx: {{ count_4xx }}</span>
                     {% endif %}
-                    
                     {% if count_5xx > 0 %}
-                    <span class="badge bg-dark text-white rounded-pill" title="Status 5xx (Server Error)">
-                        5xx: {{ count_5xx }}
-                    </span>
+                    <span class="badge bg-dark text-white rounded-pill">5xx: {{ count_5xx }}</span>
                     {% endif %}
                 </div>
-                
-                <a 
-                    href="{{ url_for('main.project_details', id=project.id) }}" 
-                    class="btn btn-sm btn-outline-primary fw-bold rounded-pill px-3 ms-2"
-                    aria-label="Gerenciar projeto {{ project.name }}">
+
+                <a href="{{ url_for('main.project_details', id=project.id) }}"
+                   class="btn btn-sm btn-outline-primary fw-bold rounded-pill px-3 ms-2">
                     Gerenciar
                 </a>
             </footer>

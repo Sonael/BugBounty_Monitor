@@ -1,4 +1,4 @@
-{% set refresh_rate = 'every 3s' if project.scan_status in ['Rodando', 'Na fila'] else 'every 60s' %}
+{% set refresh_rate = 'every 4s' if project.scan_status == 'Rodando' else ('every 8s' if project.scan_status == 'Na fila' else 'every 120s') %}
 
 <article 
     class="card border-0 shadow-sm mb-4" 
@@ -33,7 +33,7 @@
                 <h3 class="text-secondary fw-bold h4">Na Fila de Processamento</h3>
                 <p class="text-muted small animate-pulse mb-0">
                     <i class="fas fa-hourglass-half me-1" aria-hidden="true"></i>
-                    Aguardando worker disponível...
+                    {{ project.scan_message or 'Aguardando slot disponível...' }}
                 </p>
             </div>
         

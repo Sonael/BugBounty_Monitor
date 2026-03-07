@@ -8,28 +8,23 @@ import urllib.request
 from datetime import datetime
 import requests
 
-# --- Funções de Sanitização de Input ---
 
-# Caracteres permitidos em domínios (RFC 1123 + internacionalização básica)
+# ---------------------------------------------------------------------------
+# Sanitização de Input
+# ---------------------------------------------------------------------------
+
 _SAFE_DOMAIN_RE = re.compile(r'^[a-zA-Z0-9.\-]+$')
-# Protocolo permitido em URLs
 _SAFE_SCHEME_RE = re.compile(r'^https?://')
 
+
 def _sanitize_domain(value: str) -> str:
-    """
-    Valida que o valor é um hostname seguro antes de usá-lo em comandos shell.
-    Lança ValueError se detectar caracteres perigosos (ex: ';', '|', '$', '`').
-    """
     clean = value.strip().replace('https://', '').replace('http://', '').split('/')[0].split(':')[0]
     if not _SAFE_DOMAIN_RE.match(clean):
         raise ValueError(f"[SECURITY] Domínio com caracteres inválidos bloqueado: {value!r}")
     return clean
 
+
 def _sanitize_url(value: str) -> str:
-    """
-    Valida que a URL tem esquema http/https e hostname seguro.
-    Lança ValueError se detectar injeção.
-    """
     value = value.strip()
     if not _SAFE_SCHEME_RE.match(value):
         raise ValueError(f"[SECURITY] URL com esquema inválido bloqueada: {value!r}")
@@ -39,570 +34,639 @@ def _sanitize_url(value: str) -> str:
         raise ValueError(f"[SECURITY] URL com host inválido bloqueada: {value!r}")
     return value
 
-# --- Função Utilitária de Comando com Debug ---
+
+# ---------------------------------------------------------------------------
+# Redis — cache para chamadas externas lentas
+# ---------------------------------------------------------------------------
+
+_redis_client = None
+
+
+def _get_redis():
+    """
+    Retorna conexão Redis para cache (db=1, separado do Celery que usa db=0).
+    Falha silenciosamente se Redis não estiver disponível.
+    """
+    global _redis_client
+    if _redis_client is None:
+        try:
+            import redis
+            redis_host = os.environ.get('REDIS_HOST', 'redis')
+            _redis_client = redis.Redis(
+                host=redis_host, port=6379, db=1, decode_responses=True,
+                socket_connect_timeout=2, socket_timeout=2,
+            )
+            _redis_client.ping()
+        except Exception as e:
+            print(f"[CACHE] Redis indisponível: {e}")
+            _redis_client = None
+    return _redis_client
+
+
+# ---------------------------------------------------------------------------
+# Execução de comandos externos
+# ---------------------------------------------------------------------------
+
 def run_command(command, timeout=None):
-    """Roda um comando no shell e retorna a saída, com MUITO debug."""
+    """
+    Executa um comando shell e retorna linhas de stdout.
+
+    Nota: shell=True é mantido intencionalmente porque muitos comandos
+    do pipeline usam operadores de shell (pipes |, redirecionamentos >>).
+    Todos os inputs passam por _sanitize_domain / _sanitize_url antes
+    de chegarem aqui.
+    """
     try:
-        print(f"[CMD EXEC] {command}")
-        
-        # Timeout padrão de 1 hora para processos longos (batch)
-        timeout = timeout if timeout else 3600 
-        
+        print(f"[CMD] {command}")
+        timeout = timeout or 3600
         result = subprocess.run(
             command, shell=True, capture_output=True, text=True, timeout=timeout
         )
-        
-        # Se tiver erro na saída de erro (stderr), mostra no log
         if result.stderr and "level=error" in result.stderr:
-            print(f"[CMD ERROR] Stderr detectado: {result.stderr[:200]}...")
-            
+            print(f"[CMD STDERR] {result.stderr[:300]}")
         return result.stdout.splitlines()
-        
     except subprocess.TimeoutExpired:
-        print(f"[CMD TIMEOUT] O comando morreu por demora: {command}")
+        print(f"[CMD TIMEOUT] Comando expirou: {command[:120]}")
         return []
     except Exception as e:
-        print(f"[CMD CRASH] Exceção ao rodar comando: {e}")
+        print(f"[CMD ERROR] {e}")
         return []
 
-# --- Funções Individuais (Recon) ---
+
+# ---------------------------------------------------------------------------
+# Recon — Subdomínios
+# ---------------------------------------------------------------------------
 
 def find_subdomains(target_domain):
-    """
-    Fluxo Unificado: Subfinder + Amass -> Deduplicação.
-    Retorna uma lista limpa de subdomínios únicos (sem IPs, CIDRs ou ASNs).
-    """
     target_domain = _sanitize_domain(target_domain)
-    print(f"[SCANNER] Iniciando Recon Híbrido (Subfinder + Amass) para {target_domain}...")
-    
-    unique_id = uuid.uuid4().hex
-    file_subfinder = f"raw_subfinder_{unique_id}.txt"
-    file_amass = f"raw_amass_{unique_id}.txt"
-    
-    subs_set = set() # Set para garantir unicidade
+    print(f"[SCANNER] Recon Híbrido (Subfinder + Amass) para {target_domain}")
+
+    uid = uuid.uuid4().hex
+    file_subfinder = f"raw_subfinder_{uid}.txt"
+    file_amass     = f"raw_amass_{uid}.txt"
+    subs_set       = set()
 
     try:
-        # 1. Rodar Subfinder
-        print(f"[SCANNER] 1/2 Rodando Subfinder...")
-        cmd_sub = f"subfinder -d {target_domain} -silent -t 100 -all -o {file_subfinder}"
-        run_command(cmd_sub, timeout=1800)
-        
-        # 2. Rodar Amass (Modo Passivo)
-        print(f"[SCANNER] 2/2 Rodando Amass (Passive)...")
-        cmd_amass = f"amass enum -passive -d {target_domain} -noalts -timeout 29 -o {file_amass}" 
-        run_command(cmd_amass, timeout=1800)
+        print("[SCANNER] 1/2 Rodando Subfinder...")
+        run_command(f"subfinder -d {target_domain} -silent -t 100 -all -o {file_subfinder}", timeout=1800)
 
-        # 3. Processar e Deduplicar (Lógica Unificada)
+        print("[SCANNER] 2/2 Rodando Amass (Passive)...")
+        run_command(f"amass enum -passive -d {target_domain} -noalts -timeout 29 -o {file_amass}", timeout=1800)
+
         for filename in [file_subfinder, file_amass]:
-            if os.path.exists(filename):
-                with open(filename, 'r') as f:
-                    for line in f:
-                        # Limpa espaços e pega apenas a primeira coluna (remove infos extras do Amass)
-                        clean_line = line.strip().split(' ')[0]
-                        
-                        # --- FILTROS DE LIMPEZA (CRÍTICO) ---
-                        if not clean_line: continue
-                        
-                        # 1. Ignora Faixas CIDR (ex: 34.240.0.0/12)
-                        # Isso evita que o Naabu escaneie milhões de IPs
-                        if '/' in clean_line: continue
-                        
-                        # 2. Ignora Wildcards (ex: *.site.com)
-                        if '*' in clean_line: continue
-                        
-                        # 3. Ignora ASNs (números puros, ex: 16509)
-                        if clean_line.isdigit(): continue
-                        
-                        # 4. Regra de Ouro: Tem que ter pelo menos um ponto para ser domínio
-                        if '.' not in clean_line: continue
-
-                        # (Opcional) Ignora endereços IPv6 brutos se não quiser escanear ipv6
-                        if ':' in clean_line: continue 
-                        
-                        # 5. Tem que terminar com o domínio alvo (evita subdomínios falsos)
-                        if not clean_line.endswith(target_domain): continue
-
-                        subs_set.add(clean_line)
+            if not os.path.exists(filename):
+                continue
+            with open(filename, 'r') as f:
+                for line in f:
+                    cl = line.strip().split(' ')[0]
+                    if not cl: continue
+                    if '/' in cl: continue
+                    if '*' in cl: continue
+                    if cl.isdigit(): continue
+                    if '.' not in cl: continue
+                    if ':' in cl: continue
+                    if not cl.endswith(target_domain): continue
+                    subs_set.add(cl)
 
     except Exception as e:
-        print(f"[SCANNER ERROR] Erro durante o Recon: {e}")
-    
+        print(f"[SCANNER] Erro no Recon: {e}")
     finally:
-        # Limpeza dos arquivos temporários
-        if os.path.exists(file_subfinder): os.remove(file_subfinder)
-        if os.path.exists(file_amass): os.remove(file_amass)
-    
-    unique_list = list(subs_set)
-    print(f"[SCANNER] Recon finalizado. {len(unique_list)} subdomínios válidos encontrados.")
-    return unique_list
+        for fn in [file_subfinder, file_amass]:
+            if os.path.exists(fn):
+                try:
+                    os.remove(fn)
+                except Exception as e:
+                    print(f"[SCANNER] Falha ao remover {fn}: {e}")
+
+    result = list(subs_set)
+    print(f"[SCANNER] Recon finalizado: {len(result)} subdomínios.")
+    return result
+
 
 def check_alive(subdomains_list):
-    if not subdomains_list: return []
-    
+    if not subdomains_list:
+        return []
+
     filename = f"temp_subs_{uuid.uuid4().hex}.txt"
-    parsed = []
-    
+    parsed   = []
+
     try:
         with open(filename, "w") as f:
             f.write("\n".join(subdomains_list))
-        
-        print(f"[SCANNER] Rodando HTTPX em {len(subdomains_list)} alvos...")
-        
-        cmd = f"/usr/local/bin/pd-httpx -l {filename} -json -silent -sc -td -probe -ip -threads 50"
+
+        print(f"[SCANNER] HTTPX em {len(subdomains_list)} alvos...")
+        cmd     = f"/usr/local/bin/pd-httpx -l {filename} -json -silent -sc -td -probe -ip -threads 50"
         results = run_command(cmd, timeout=1800)
-        
-        print(f"[SCANNER] HTTPX finalizado. {len(results)} respostas capturadas.")
-        
+        print(f"[SCANNER] HTTPX: {len(results)} respostas.")
+
         for line in results:
             try:
                 data = json.loads(line)
                 if data.get('url'):
-                    # Capturar o IP (httpx retorna lista em 'a')
-                    ips = data.get('a', []) 
-                    primary_ip = ips[0] if ips else None
-                    
+                    ips = data.get('a', [])
                     parsed.append({
-                        'url': data.get('url'),
+                        'url':    data['url'],
                         'status': data.get('status_code'),
-                        'tech': data.get('tech', []),
-                        'ip': primary_ip 
+                        'tech':   data.get('tech', []),
+                        'ip':     ips[0] if ips else None,
                     })
-            except: continue
+            except Exception as e:
+                print(f"[SCANNER] Linha HTTPX inválida: {e}")
     finally:
-        if os.path.exists(filename): os.remove(filename)
+        if os.path.exists(filename):
+            try:
+                os.remove(filename)
+            except Exception as e:
+                print(f"[SCANNER] Falha ao remover {filename}: {e}")
+
     return parsed
 
-# --- FUNÇÕES BULK (LOTE) ---
+
+# ---------------------------------------------------------------------------
+# Nuclei
+# ---------------------------------------------------------------------------
 
 def scan_nuclei_bulk(targets_file):
-    """
-    Roda o Nuclei lendo uma lista de URLs de um arquivo.
-    """
-    print(f"[SCANNER BULK] Iniciando Nuclei em Lote no arquivo: {targets_file}")
-    
-    # Arquivo temporário para saída JSON
-    output_nuclei = f"nuclei_res_{uuid.uuid4().hex}.json"
-    
-    # Comando Nuclei Otimizado (Inclui 'exposure' para achar .git e 'misconfig')
-    cmd = f"nuclei -l {targets_file} -tags cve2023,cve2024,cve2025,cve2026,misconfig,exposure,tech,panel -s low,medium,high,critical -j -silent -timeout 2 -c 80 -o {output_nuclei}"
-    
+    print(f"[SCANNER] Nuclei em lote: {targets_file}")
+    output = f"nuclei_res_{uuid.uuid4().hex}.json"
+
+    cmd = (
+        f"nuclei -l {targets_file} "
+        f"-tags cve2023,cve2024,cve2025,cve2026,misconfig,exposure,tech,panel "
+        f"-s low,medium,high,critical -j -silent -timeout 2 -c 80 -o {output}"
+    )
     run_command(cmd, timeout=7200)
-    
+
     vulns = []
-    
-    if os.path.exists(output_nuclei):
-        print(f"[SCANNER BULK] Lendo resultados do Nuclei em {output_nuclei}...")
+    if os.path.exists(output):
         try:
-            with open(output_nuclei, 'r') as f:
+            with open(output, 'r') as f:
                 for line in f:
-                    if not line.strip(): continue
+                    if not line.strip():
+                        continue
                     try:
                         data = json.loads(line)
                         vulns.append({
-                            'host': data.get('host'),
-                            'tool': 'Nuclei',
-                            'name': data.get('info', {}).get('name'),
-                            'severity': data.get('info', {}).get('severity'),
-                            'description': f"Matcher: {data.get('matcher-name')} | URL: {data.get('matched-at')}"
+                            'host':        data.get('host'),
+                            'tool':        'Nuclei',
+                            'name':        data.get('info', {}).get('name'),
+                            'severity':    data.get('info', {}).get('severity'),
+                            'description': f"Matcher: {data.get('matcher-name')} | URL: {data.get('matched-at')}",
                         })
                     except Exception as e:
-                        print(f"[SCANNER JSON ERROR] Falha ao ler linha do Nuclei: {e}")
-                        continue
+                        print(f"[SCANNER] Linha Nuclei inválida: {e}")
         except Exception as e:
-            print(f"[SCANNER ERROR] Erro fatal lendo arquivo Nuclei: {e}")
+            print(f"[SCANNER] Erro ao ler Nuclei output: {e}")
         finally:
-            os.remove(output_nuclei)
+            try:
+                os.remove(output)
+            except Exception:
+                pass
     else:
-        print("[SCANNER BULK] Nuclei terminou sem criar arquivo de saída.")
-            
-    print(f"[SCANNER BULK] Nuclei terminou. {len(vulns)} vulnerabilidades potenciais achadas.")
+        print("[SCANNER] Nuclei: sem arquivo de saída.")
+
+    print(f"[SCANNER] Nuclei: {len(vulns)} achados.")
     return vulns
 
+
+# ---------------------------------------------------------------------------
+# XSS Pipeline: Katana + GAU → Dalfox
+# ---------------------------------------------------------------------------
+
 def scan_crawling_xss_bulk(targets_file):
-    """
-    Roda em 3 etapas integradas: Katana + GAU -> Dalfox
-    """
-    print(f"[SCANNER BULK] Iniciando Pipeline Katana + GAU -> Dalfox no arquivo: {targets_file}")
-    
-    temp_urls_file = f"crawl_urls_{uuid.uuid4().hex}.txt"
+    print(f"[SCANNER] Katana + GAU → Dalfox: {targets_file}")
+    temp_urls = f"crawl_urls_{uuid.uuid4().hex}.txt"
     output_xss = f"xss_{uuid.uuid4().hex}.json"
-    
     vulns = []
 
     try:
-        # --- ETAPA 1: CRAWLING ATIVO (KATANA) ---
-        print(f"[SCANNER BULK] 1/3 Rodando Katana (Crawler)...")
-        cmd_katana = f"katana -list {targets_file} -d 2 -jc -silent -o {temp_urls_file}"
-        run_command(cmd_katana, timeout=3600)
+        print("[SCANNER] 1/3 Katana...")
+        run_command(f"katana -list {targets_file} -d 2 -jc -silent -o {temp_urls}", timeout=3600)
 
-        # --- ETAPA 2: CRAWLING PASSIVO (GAU - HISTÓRICO) ---
-        print(f"[SCANNER BULK] 2/3 Rodando GAU para enriquecer com URLs arquivadas...")
-        # Usa 'cat' para ler o arquivo de alvos e passar pro GAU
-        cmd_gau = f"cat {targets_file} | gau --blacklist png,jpg,jpeg,gif,css,svg,woff,woff2 >> {temp_urls_file}"
-        run_command(cmd_gau, timeout=1800)
+        print("[SCANNER] 2/3 GAU...")
+        run_command(
+            f"cat {targets_file} | gau --blacklist png,jpg,jpeg,gif,css,svg,woff,woff2 >> {temp_urls}",
+            timeout=1800,
+        )
 
-        if not os.path.exists(temp_urls_file) or os.path.getsize(temp_urls_file) == 0:
-            print("[SCANNER BULK] Katana e GAU não encontraram nenhuma URL.")
+        if not os.path.exists(temp_urls) or os.path.getsize(temp_urls) == 0:
+            print("[SCANNER] Katana+GAU: sem URLs.")
             return []
 
-        # Conta linhas totais
-        with open(temp_urls_file) as f:
-            count = sum(1 for line in f)
-        print(f"[SCANNER BULK] Total de URLs coletadas (Katana + GAU): {count}. Iniciando Dalfox...")
+        with open(temp_urls) as f:
+            count = sum(1 for _ in f)
+        print(f"[SCANNER] 3/3 Dalfox em {count} URLs...")
+        run_command(
+            f"dalfox file {temp_urls} --format json --silence --skip-bav -o {output_xss}",
+            timeout=3600,
+        )
 
-        # --- ETAPA 3: SCANNING (DALFOX) ---
-        print(f"[SCANNER BULK] 3/3 Rodando Dalfox...")
-        
-        cmd_dalfox = f"dalfox file {temp_urls_file} --format json --silence --skip-bav -o {output_xss}"
-        run_command(cmd_dalfox, timeout=3600)
-
-        # --- PROCESSAR RESULTADOS ---
         if os.path.exists(output_xss):
-            print(f"[SCANNER BULK] Lendo resultados do Dalfox...")
             try:
                 with open(output_xss, 'r') as f:
                     content = f.read()
-                    
-                    if content.strip() == "[{}]":
-                         print("[SCANNER BULK] Dalfox retornou objeto vazio (Falso Positivo). Ignorando.")
-                         return []
-
-                    if content.strip().startswith('['):
-                        data_list = json.loads(content)
-                        for data in data_list:
-                            parsed = parse_dalfox_json(data)
-                            if parsed['host']: vulns.append(parsed)
-                    else:
-                        lines = content.splitlines()
-                        for line in lines:
-                            if not line.strip(): continue
-                            try:
-                                data = json.loads(line)
-                                parsed = parse_dalfox_json(data)
-                                if parsed['host']: vulns.append(parsed)
-                            except: continue
+                if content.strip() == "[{}]":
+                    return []
+                if content.strip().startswith('['):
+                    for data in json.loads(content):
+                        p = parse_dalfox_json(data)
+                        if p['host']:
+                            vulns.append(p)
+                else:
+                    for line in content.splitlines():
+                        if not line.strip():
+                            continue
+                        try:
+                            p = parse_dalfox_json(json.loads(line))
+                            if p['host']:
+                                vulns.append(p)
+                        except Exception as e:
+                            print(f"[SCANNER] Dalfox linha inválida: {e}")
             except Exception as e:
-                print(f"[SCANNER ERROR] Erro lendo JSON do Dalfox: {e}")
-        else:
-            print("[SCANNER BULK] Dalfox terminou sem gerar arquivo de saída.")
+                print(f"[SCANNER] Dalfox output inválido: {e}")
 
     except Exception as e:
-        print(f"[SCANNER CRITICAL] Erro no pipeline XSS: {e}")
-
+        print(f"[SCANNER] Pipeline XSS falhou: {e}")
     finally:
-        if os.path.exists(temp_urls_file): os.remove(temp_urls_file)
-        if os.path.exists(output_xss): os.remove(output_xss)
-            
-    print(f"[SCANNER BULK] XSS Scan terminou. {len(vulns)} falhas encontradas.")
+        for fn in [temp_urls, output_xss]:
+            if os.path.exists(fn):
+                try:
+                    os.remove(fn)
+                except Exception:
+                    pass
+
+    print(f"[SCANNER] XSS: {len(vulns)} achados.")
     return vulns
 
+
+# ---------------------------------------------------------------------------
+# SQLMap Pipeline
+# ---------------------------------------------------------------------------
+
 def scan_sqlmap_bulk(targets_file):
-    """
-    Pipeline: Katana (qurl) -> SQLMap (Smart)
-    """
-    print(f"[SCANNER BULK] Iniciando Pipeline Katana -> SQLMap no arquivo: {targets_file}")
-    
-    params_file = f"sql_params_{uuid.uuid4().hex}.txt"
-    results_csv = f"sqlmap_res_{uuid.uuid4().hex}.csv"
-    
+    print(f"[SCANNER] Katana → SQLMap: {targets_file}")
+    params_file  = f"sql_params_{uuid.uuid4().hex}.txt"
+    results_csv  = f"sqlmap_res_{uuid.uuid4().hex}.csv"
     vulns = []
 
     try:
-        # 1. Encontrar URLs com parâmetros
-        print("[SCANNER BULK] 1/2 Buscando parâmetros expostos com Katana...")
-        cmd_katana = f"katana -list {targets_file} -d 2 -silent -f qurl -o {params_file}"
-        run_command(cmd_katana, timeout=3600)
-        
+        print("[SCANNER] 1/2 Katana (qurl)...")
+        run_command(
+            f"katana -list {targets_file} -d 2 -silent -f qurl -o {params_file}",
+            timeout=3600,
+        )
+
         if not os.path.exists(params_file) or os.path.getsize(params_file) == 0:
-            print("[SCANNER BULK] Nenhuma URL parametrizada encontrada para teste de SQLi.")
+            print("[SCANNER] SQLMap: sem parâmetros encontrados.")
             return []
 
-        # 2. Rodar SQLMap
-        print("[SCANNER BULK] 2/2 Rodando SQLMap (Smart Mode)...")
-        cmd_sqlmap = f"sqlmap -m {params_file} --batch --random-agent --risk=1 --level=1 --smart --results-file={results_csv}"
-        run_command(cmd_sqlmap, timeout=7200)
+        print("[SCANNER] 2/2 SQLMap...")
+        run_command(
+            f"sqlmap -m {params_file} --batch --random-agent --risk=1 --level=1 "
+            f"--smart --results-file={results_csv}",
+            timeout=7200,
+        )
 
-        # 3. Ler Resultados CSV
         if os.path.exists(results_csv):
-            print("[SCANNER BULK] Lendo resultados do SQLMap...")
             try:
                 with open(results_csv, 'r') as f:
-                    reader = csv.reader(f)
-                    for row in reader:
-                        if len(row) >= 6:
-                            if "Target URL" in str(row[0]): continue
+                    for row in csv.reader(f):
+                        if len(row) >= 6 and "Target URL" not in str(row[0]):
                             vulns.append({
-                                'host': row[0],
-                                'tool': 'SQLMap',
-                                'severity': 'Critical',
-                                'name': f"SQL Injection ({row[4]})",
-                                'description': f"Param: {row[2]} | Payload: {row[5]}"
+                                'host':        row[0],
+                                'tool':        'SQLMap',
+                                'severity':    'Critical',
+                                'name':        f"SQL Injection ({row[4]})",
+                                'description': f"Param: {row[2]} | Payload: {row[5]}",
                             })
             except Exception as e:
-                print(f"[SCANNER ERROR] Erro lendo CSV do SQLMap: {e}")
+                print(f"[SCANNER] SQLMap CSV inválido: {e}")
         else:
-             print("[SCANNER BULK] SQLMap terminou sem confirmar vulnerabilidades.")
+            print("[SCANNER] SQLMap: sem vulnerabilidades confirmadas.")
 
     except Exception as e:
-        print(f"[SCANNER CRITICAL] Erro no pipeline SQLMap: {e}")
-    
+        print(f"[SCANNER] Pipeline SQLMap falhou: {e}")
     finally:
-        if os.path.exists(params_file): os.remove(params_file)
-        if os.path.exists(results_csv): os.remove(results_csv)
+        for fn in [params_file, results_csv]:
+            if os.path.exists(fn):
+                try:
+                    os.remove(fn)
+                except Exception:
+                    pass
 
-    print(f"[SCANNER BULK] SQLMap terminou. {len(vulns)} falhas encontradas.")
+    print(f"[SCANNER] SQLMap: {len(vulns)} achados.")
     return vulns
 
+
 def parse_dalfox_json(data):
-    """
-    Parser robusto para o JSON do Dalfox.
-    """
-    host = data.get('url') or data.get('target') or data.get('poc') or ""
+    host    = data.get('url') or data.get('target') or data.get('poc') or ""
     payload = data.get('payload') or "Payload genérico"
-    param = data.get('param') or "Parâmetro desconhecido"
-    
-    sev = data.get('severity', 'High')
+    param   = data.get('param') or "Parâmetro desconhecido"
+    sev     = data.get('severity', 'High')
     if isinstance(sev, str):
         sev = sev.capitalize()
-
     return {
-        'host': host,
-        'tool': 'Dalfox',
-        'severity': sev, 
-        'name': f"Cross-Site Scripting ({data.get('type', 'XSS')})",
-        'description': f"Payload: {payload} em {param}"
+        'host':        host,
+        'tool':        'Dalfox',
+        'severity':    sev,
+        'name':        f"Cross-Site Scripting ({data.get('type', 'XSS')})",
+        'description': f"Payload: {payload} em {param}",
     }
 
-def scan_naabu_bulk(targets_file):
+
+# ---------------------------------------------------------------------------
+# Naabu — Port Scan com Chunking
+# ---------------------------------------------------------------------------
+
+NAABU_CHUNK_SIZE    = int(os.environ.get('NAABU_CHUNK_SIZE', 500))
+NAABU_CHUNK_TIMEOUT = int(os.environ.get('NAABU_CHUNK_TIMEOUT', 600))
+NAABU_RATE          = int(os.environ.get('NAABU_RATE', 1000))
+
+
+def scan_naabu_bulk(targets_file, chunk_size=None, chunk_timeout=None, rate=None):
     """
-    Roda Naabu em lista de domínios.
+    Roda Naabu em lotes (chunks) para evitar timeout em projetos com 8000+ hosts.
+
+    Configuração via .env:
+      NAABU_CHUNK_SIZE    (padrão 500)  — hosts por lote
+      NAABU_CHUNK_TIMEOUT (padrão 600)  — segundos de timeout por lote
+      NAABU_RATE          (padrão 1000) — pacotes/s
     """
-    print(f"[SCANNER] Iniciando Naabu (Port Scan) no arquivo: {targets_file}")
-    
-    cmd = f"naabu -list {targets_file} -top-ports 100 -json -silent"
-    results = run_command(cmd, timeout=1800)
-    
+    chunk_size    = chunk_size    or NAABU_CHUNK_SIZE
+    chunk_timeout = chunk_timeout or NAABU_CHUNK_TIMEOUT
+    rate          = rate          or NAABU_RATE
+
+    try:
+        with open(targets_file, 'r') as f:
+            all_hosts = [l.strip() for l in f if l.strip()]
+    except Exception as e:
+        print(f"[SCANNER] Naabu: falha ao ler alvos: {e}")
+        return {}
+
+    if not all_hosts:
+        return {}
+
+    chunks       = [all_hosts[i:i + chunk_size] for i in range(0, len(all_hosts), chunk_size)]
+    total_chunks = len(chunks)
+    print(f"[SCANNER] Naabu: {len(all_hosts)} hosts em {total_chunks} lotes de {chunk_size}.")
+
     port_map = {}
-    
-    for line in results:
+
+    for idx, chunk in enumerate(chunks, 1):
+        chunk_file = f"naabu_chunk_{uuid.uuid4().hex}.txt"
+        print(f"[SCANNER] Naabu lote {idx}/{total_chunks} ({len(chunk)} hosts)...")
+
         try:
-            data = json.loads(line)
-            host = data.get('host')
-            port = data.get('port')
-            if host and port:
-                if host not in port_map:
-                    port_map[host] = []
-                port_map[host].append(str(port))
-        except: continue
-        
-    final_map = {k: ", ".join(v) for k, v in port_map.items()}
-    print(f"[SCANNER] Naabu finalizado. {len(final_map)} hosts com portas abertas.")
+            with open(chunk_file, 'w') as f:
+                f.write("\n".join(chunk))
+
+            cmd = (
+                f"naabu -list {chunk_file} "
+                f"-top-ports 100 -rate {rate} -retries 1 -timeout 5 "
+                f"-json -silent"
+            )
+            results = run_command(cmd, timeout=chunk_timeout)
+
+            chunk_ports = 0
+            for line in results:
+                try:
+                    data = json.loads(line)
+                    host = data.get('host') or data.get('ip')
+                    port = data.get('port')
+                    if host and port:
+                        port_map.setdefault(host, []).append(str(port))
+                        chunk_ports += 1
+                except Exception as e:
+                    print(f"[SCANNER] Naabu linha inválida: {e}")
+
+            print(f"[SCANNER] Lote {idx}/{total_chunks}: {chunk_ports} portas.")
+
+        except Exception as e:
+            print(f"[SCANNER] Lote {idx}/{total_chunks} falhou: {e}")
+        finally:
+            if os.path.exists(chunk_file):
+                try:
+                    os.remove(chunk_file)
+                except Exception:
+                    pass
+
+    final_map = {host: ", ".join(ports) for host, ports in port_map.items()}
+    print(f"[SCANNER] Naabu finalizado: {len(final_map)} hosts com portas abertas.")
     return final_map
 
+
+# ---------------------------------------------------------------------------
+# DNS
+# ---------------------------------------------------------------------------
+
 def run_dig_info(domain):
-    """
-    Roda DIG para pegar CNAME e MX.
-    """
     try:
         domain = _sanitize_domain(domain)
     except ValueError as e:
-        print(e)
+        print(str(e))
         return None
     info = []
     try:
-        cname = subprocess.run(f"dig +short CNAME {domain}", shell=True, capture_output=True, text=True).stdout.strip()
-        if cname: info.append(f"CNAME: {cname}")
-            
-        mx = subprocess.run(f"dig +short MX {domain}", shell=True, capture_output=True, text=True).stdout.strip()
+        cname = subprocess.run(
+            f"dig +short CNAME {domain}", shell=True, capture_output=True, text=True
+        ).stdout.strip()
+        if cname:
+            info.append(f"CNAME: {cname}")
+
+        mx = subprocess.run(
+            f"dig +short MX {domain}", shell=True, capture_output=True, text=True
+        ).stdout.strip()
         if mx:
-            first_mx = mx.split('\n')[0].split(' ')[-1] 
-            info.append(f"MX: {first_mx}")
-    except Exception: return None
+            info.append(f"MX: {mx.split(chr(10))[0].split(' ')[-1]}")
+    except Exception as e:
+        print(f"[SCANNER] DIG falhou em {domain}: {e}")
+        return None
 
     return " | ".join(info) if info else None
-        
+
+
+# ---------------------------------------------------------------------------
+# Discord
+# ---------------------------------------------------------------------------
+
 def send_discord_embed(title, description, fields, color_hex):
-    """
-    Envia notificação para Discord.
-    """
     webhook_url = os.environ.get('DISCORD_WEBHOOK_URL')
-    
     if not webhook_url:
-        print("[NOTIFY ERROR] Variável DISCORD_WEBHOOK_URL não configurada.")
+        print("[NOTIFY] DISCORD_WEBHOOK_URL não configurada.")
         return
 
-    embed_data = {
+    payload = {
         "username": "BugBounty Bot",
         "avatar_url": "https://i.imgur.com/4M34hi2.png",
-        "embeds": [
-            {
-                "title": title,
-                "description": description,
-                "color": color_hex,
-                "fields": fields,
-                "footer": {"text": "🔎 BugBounty Scanner • Automático"},
-                "timestamp": datetime.utcnow().isoformat()
-            }
-        ]
+        "embeds": [{
+            "title":       title,
+            "description": description,
+            "color":       color_hex,
+            "fields":      fields,
+            "footer":      {"text": "🔎 BugBounty Scanner • Automático"},
+            "timestamp":   datetime.utcnow().isoformat(),
+        }],
     }
-
     try:
-        data = json.dumps(embed_data).encode('utf-8')
-        req = urllib.request.Request(
-            webhook_url, 
-            data=data, 
-            headers={'User-Agent': 'Mozilla/5.0', 'Content-Type': 'application/json'}
+        data = json.dumps(payload).encode('utf-8')
+        req  = urllib.request.Request(
+            webhook_url, data=data,
+            headers={'User-Agent': 'Mozilla/5.0', 'Content-Type': 'application/json'},
         )
-        with urllib.request.urlopen(req) as response:
-            print(f"[NOTIFY] Embed enviado! Status: {response.getcode()}")
-            
+        with urllib.request.urlopen(req) as resp:
+            print(f"[NOTIFY] Discord: {resp.getcode()}")
     except Exception as e:
-        print(f"[NOTIFY ERROR] Falha ao enviar Embed: {e}")
+        print(f"[NOTIFY] Falha no Discord: {e}")
 
-# --- FERRAMENTAS ADICIONAIS (GAU, CMSEEK, FFUF) ---
+
+# ---------------------------------------------------------------------------
+# GAU, CMSeeK, FFuf
+# ---------------------------------------------------------------------------
 
 def scan_gau(target_domain):
-    """
-    Busca URLs no WaybackMachine, AlienVault, etc. (Função Standalone).
-    Ótimo para achar endpoints de API esquecidos.
-    """
-    print(f"[SCANNER] Rodando GAU (Archives) em {target_domain}...")
-    output_file = f"gau_{uuid.uuid4().hex}.txt"
-    
-    # --blacklist ignora imagens e fontes para não poluir
-    cmd = f"gau {target_domain} --blacklist png,jpg,jpeg,gif,css,svg,woff,woff2 --o {output_file}"
-    run_command(cmd, timeout=1800)
-    
+    print(f"[SCANNER] GAU em {target_domain}...")
+    output = f"gau_{uuid.uuid4().hex}.txt"
+    run_command(
+        f"gau {target_domain} --blacklist png,jpg,jpeg,gif,css,svg,woff,woff2 --o {output}",
+        timeout=1800,
+    )
     urls = []
-    if os.path.exists(output_file):
+    if os.path.exists(output):
         try:
-            with open(output_file, 'r') as f:
-                urls = list(set([line.strip() for line in f if line.strip()]))
-            os.remove(output_file)
-        except: pass
-    
-    print(f"[SCANNER] GAU encontrou {len(urls)} URLs históricas.")
+            with open(output, 'r') as f:
+                urls = list(set(l.strip() for l in f if l.strip()))
+        except Exception as e:
+            print(f"[SCANNER] GAU output inválido: {e}")
+        finally:
+            try:
+                os.remove(output)
+            except Exception:
+                pass
+    print(f"[SCANNER] GAU: {len(urls)} URLs.")
     return urls
 
+
 def scan_cmseek(target_url):
-    """
-    Detecta qual CMS o site usa lendo o JSON de resultado oficial.
-    """
     try:
         target_url = _sanitize_url(target_url)
     except ValueError as e:
-        print(e)
+        print(str(e))
         return None
-    print(f"[SCANNER] Rodando CMSeeK em {target_url}...")
-    
-    # 1. Rodar o comando
-    # --batch: Executa sem perguntar nada
-    cmd = f"python3 /opt/CMSeeK/cmseek.py -u {target_url} --batch --random-agent"
-    run_command(cmd, timeout=1800)
-    
-    # 2. Descobrir o caminho do arquivo JSON gerado
-    # Extrair apenas o hostname da URL (ex: https://site.com -> site.com)
+
+    print(f"[SCANNER] CMSeeK em {target_url}...")
+    run_command(
+        f"python3 /opt/CMSeeK/cmseek.py -u {target_url} --batch --random-agent",
+        timeout=1800,
+    )
+
     from urllib.parse import urlparse
-    
-    hostname = ""
     try:
-        parsed = urlparse(target_url)
-        hostname = parsed.netloc # Pega 'site.com' ou 'site.com:8080'
-        if not hostname: 
-            # Fallback caso a URL venha sem https://
-            hostname = target_url.split('/')[0]
-    except:
+        hostname = urlparse(target_url).netloc or target_url.split('/')[0]
+    except Exception:
         hostname = target_url
 
-    # Caminho padrão onde o CMSeeK salva os resultados no Docker
-    # O CMSeeK cria uma pasta com o nome do host dentro de Result
     result_file = f"/opt/CMSeeK/Result/{hostname}/cms.json"
-    
-    # 3. Ler o JSON e extrair o CMS
     if os.path.exists(result_file):
         try:
             with open(result_file, 'r') as f:
                 data = json.load(f)
-                
-                # O JSON costuma ter a chave 'cms_name'
-                cms_name = data.get('cms_name')
-                
-                # Se achou algo válido (CMSeeK às vezes retorna vazio ou null)
-                if cms_name and cms_name.lower() != 'null':
-                    version = data.get('cms_version')
-                    
-                    # Retorna "WordPress 6.0" ou apenas "Joomla"
-                    if version and version != '0.0.0':
-                        return f"{cms_name} {version}"
-                    return cms_name
-                    
+            cms = data.get('cms_name')
+            if cms and cms.lower() != 'null':
+                ver = data.get('cms_version')
+                return f"{cms} {ver}" if ver and ver != '0.0.0' else cms
         except Exception as e:
-            print(f"[SCANNER ERROR] Erro lendo JSON do CMSeeK: {e}")
-            
+            print(f"[SCANNER] CMSeeK JSON inválido: {e}")
     return None
 
+
 def scan_ffuf(target_url):
-    """
-    Tenta descobrir diretórios ocultos. Retorna 'raw_path' para salvar no domínio.
-    """
     try:
         target_url = _sanitize_url(target_url)
     except ValueError as e:
-        print(e)
+        print(str(e))
         return []
-    print(f"[SCANNER] Rodando FFuf (Fuzzing) em {target_url}...")
-    output_file = f"ffuf_{uuid.uuid4().hex}.json"
-    
 
-    cmd = f"ffuf -u {target_url}/FUZZ -w /opt/wordlists/common.txt -mc 200,204,301,302,307,403 -o {output_file} -of json -s -t 50 -ac"
-    
-    run_command(cmd, timeout=1800) 
-    
-    found_paths = []
-    if os.path.exists(output_file):
+    print(f"[SCANNER] FFuf em {target_url}...")
+    output = f"ffuf_{uuid.uuid4().hex}.json"
+    run_command(
+        f"ffuf -u {target_url}/FUZZ -w /opt/wordlists/common.txt "
+        f"-mc 200,204,301,302,307,403 -o {output} -of json -s -t 50 -ac",
+        timeout=1800,
+    )
+
+    paths = []
+    if os.path.exists(output):
         try:
-            with open(output_file, 'r') as f:
+            with open(output, 'r') as f:
                 data = json.load(f)
-                for res in data.get('results', []):
-                    path_found = res.get('input', {}).get('FUZZ')
-                    full_url = f"{target_url}/{path_found}"
-                    
-                    found_paths.append({
-                        'host': full_url,
-                        'raw_path': f"/{path_found}",
-                        'tool': 'FFuf',
-                        'severity': 'Info', 
-                        'name': 'Directory Discovered',
-                        'description': f"Path: /{path_found} | Status: {res.get('status')} | Size: {res.get('length')}"
-                    })
-            os.remove(output_file)
+            for res in data.get('results', []):
+                path = res.get('input', {}).get('FUZZ')
+                paths.append({
+                    'host':        f"{target_url}/{path}",
+                    'raw_path':    f"/{path}",
+                    'tool':        'FFuf',
+                    'severity':    'Info',
+                    'name':        'Directory Discovered',
+                    'description': f"Path: /{path} | Status: {res.get('status')} | Size: {res.get('length')}",
+                })
         except Exception as e:
-            print(f"[SCANNER ERROR] Falha lendo FFuf JSON: {e}")
-        
-    print(f"[SCANNER] FFuf encontrou {len(found_paths)} caminhos.")
-    return found_paths
+            print(f"[SCANNER] FFuf output inválido: {e}")
+        finally:
+            try:
+                os.remove(output)
+            except Exception:
+                pass
 
-def get_first_seen_crtsh(subdomain):
+    print(f"[SCANNER] FFuf: {len(paths)} caminhos.")
+    return paths
+
+
+# ---------------------------------------------------------------------------
+# crt.sh — com cache Redis (30 dias)
+# ---------------------------------------------------------------------------
+
+_CRTSH_CACHE_TTL = 60 * 60 * 24 * 30  # 30 dias
+
+
+def get_first_seen_crtsh(subdomain: str):
     """
-    Consulta o crt.sh para descobrir a data do certificado mais antigo.
-    Retorna uma string data (YYYY-MM-DD) ou None.
+    Consulta crt.sh para data do certificado mais antigo.
+    Resultado cacheado no Redis por 30 dias para evitar rate limiting.
+    Retorna string 'YYYY-MM-DD' ou None.
     """
-    print(f"[SCANNER] Buscando data de criação (SSL) para {subdomain}...")
+    cache_key = f"crtsh:{subdomain}"
+
+    # Tenta cache
+    try:
+        r = _get_redis()
+        if r:
+            cached = r.get(cache_key)
+            if cached is not None:
+                print(f"[CACHE] crt.sh hit: {subdomain}")
+                return cached if cached != '__null__' else None
+    except Exception as e:
+        print(f"[CACHE] Redis get falhou: {e}")
+
+    # Consulta real
+    result = None
+    print(f"[SCANNER] crt.sh para {subdomain}...")
     try:
         url = f"https://crt.sh/?q={subdomain}&output=json"
-        # Timeout curto para não travar o worker se o crt.sh estiver lento
-        r = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=30)
-        
-        if r.status_code == 200 and r.content:
-            data = r.json()
-            # Pega todas as datas 'not_before'
-            dates = [entry['not_before'] for entry in data]
-            dates.sort() 
-            
+        r_http = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=30)
+        if r_http.status_code == 200 and r_http.content:
+            dates = sorted(entry['not_before'] for entry in r_http.json())
             if dates:
-                print(f"[SCANNER] Data mais antiga encontrada para {subdomain}: {dates[0].split('T')[0]}")
-                return dates[0].split('T')[0]
+                result = dates[0].split('T')[0]
+                print(f"[SCANNER] crt.sh {subdomain}: {result}")
     except Exception as e:
-        print(f"[SCANNER WARN] Falha ao consultar crt.sh para {subdomain}: {e}")
-    
-    return None
+        print(f"[SCANNER] crt.sh falhou em {subdomain}: {e}")
+
+    # Salva no cache (incluindo resultado None como sentinela)
+    try:
+        r = _get_redis()
+        if r:
+            r.setex(cache_key, _CRTSH_CACHE_TTL, result if result else '__null__')
+    except Exception as e:
+        print(f"[CACHE] Redis set falhou: {e}")
+
+    return result

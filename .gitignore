@@ -27,6 +27,7 @@ ffuf_*.json
 truffle_*.json
 sqlmap_res_*.csv
 cmseek_*.json
+naabu*
 
 *.log
 celerybeat-schedule

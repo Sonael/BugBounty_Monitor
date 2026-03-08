@@ -327,8 +327,8 @@
                             <i class="fas fa-sync fa-spin me-1 text-primary" aria-hidden="true"></i>
                             Scans Ativos
                         </p>
-                        <ul class="list-unstyled mb-0">
-                        {% for p in active_projects[:3] %}
+                        <ul class="list-unstyled mb-0" style="max-height:150px; overflow-y:auto; padding-right:4px;">
+                        {% for p in active_projects %}
                             <li class="d-flex align-items-center mb-2">
                                 <span class="badge {% if p.scan_status == 'Rodando' %}bg-primary{% else %}bg-secondary{% endif %} me-2"
                                       style="font-size:.65rem;">{{ p.scan_status }}</span>

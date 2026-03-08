@@ -17,6 +17,7 @@ crawl_urls_*.txt
 gau_*.txt
 sql_params_*.txt
 archive_*.txt
+raw*
 
 nuclei_res_*.json
 naabu_*.json

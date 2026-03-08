@@ -531,7 +531,7 @@ def start_global_scan():
     # Marca todos como pendentes (sem despachar ainda)
     for p in projects:
         p.scan_status = 'Na fila'
-        p.scan_message = '⏳ Aguardando slot disponível...'
+        p.scan_message = 'Aguardando Worker disponível...'
         p.current_task_id = None
 
     db.session.commit()
@@ -541,7 +541,7 @@ def start_global_scan():
     for p in projects[:GLOBAL_SCAN_CONCURRENCY]:
         task_id = celery_uuid()
         p.current_task_id = task_id
-        p.scan_message = 'Aguardando worker...'
+        p.scan_message = 'Aguardando worker disponível...'
         db.session.flush()
         run_scan_task.apply_async(args=[p.id, 'full'], task_id=task_id)
         dispatched += 1

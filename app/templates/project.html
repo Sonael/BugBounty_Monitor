@@ -38,14 +38,20 @@
                         </li>
                         <li><hr class="dropdown-divider"></li>
                         <li>
-                            <form action="{{ url_for('main.mark_all_scanned', id=project.id) }}" method="POST" class="px-3 py-1">
-                                <button type="submit" class="btn btn-sm btn-outline-secondary w-100 text-start">
-                                    <i class="fas fa-check-double me-2 text-muted"></i>Marcar todos como verificados
-                                </button>
-                            </form>
+                            <a class="dropdown-item text-muted"
+                               href="#"
+                               onclick="event.preventDefault(); document.getElementById('form-mark-scanned').submit();">
+                                <i class="fas fa-check-double me-2"></i>Marcar todos como verificados
+                            </a>
                         </li>
                     </ul>
                 </div>
+
+                <!-- Hidden form for mark_all_scanned (fora do dropdown para evitar clipping) -->
+                <form id="form-mark-scanned"
+                      action="{{ url_for('main.mark_all_scanned', id=project.id) }}"
+                      method="POST"
+                      class="d-none"></form>
 
                 <button type="button" 
                         class="btn btn-outline-primary btn-sm fw-bold shadow-sm"

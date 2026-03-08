@@ -119,122 +119,369 @@
 <div class="tab-content" id="dashboardTabsContent">
     
     <!-- Overview Tab -->
-    <div class="tab-pane fade show active" 
-         id="overview-pane" 
-         role="tabpanel" 
+    <div class="tab-pane fade show active"
+         id="overview-pane"
+         role="tabpanel"
          aria-labelledby="overview-tab"
          tabindex="0">
-        <div class="row">
-            <!-- Security Status Card -->
-            <div class="col-lg-6 mb-3 mb-lg-0">
+
+        {# ── Pré-calcula totais a partir dos cards_stats ── #}
+        {% set ns = namespace(
+            total_alive=0, total_dead=0, total_4xx=0, total_5xx=0,
+            total_domains=0, total_vulns=0, total_pending=0
+        ) %}
+        {% for p in projects %}
+            {% set cs = cards_stats.get(p.id, {}) %}
+            {% set ns.total_alive    = ns.total_alive    + cs.get('c2xx', 0) + cs.get('c3xx', 0) %}
+            {% set ns.total_4xx      = ns.total_4xx      + cs.get('c4xx', 0) %}
+            {% set ns.total_5xx      = ns.total_5xx      + cs.get('c5xx', 0) %}
+            {% set ns.total_dead     = ns.total_dead     + cs.get('dead', 0) %}
+            {% set ns.total_domains  = ns.total_domains  + cs.get('total', 0) %}
+            {% set ns.total_vulns    = ns.total_vulns    + cs.get('vulns', 0) %}
+            {% set ns.total_pending  = ns.total_pending  + cs.get('pendentes', 0) %}
+        {% endfor %}
+
+        {# Projetos com vulns, ordenados desc #}
+        {% set risky = [] %}
+        {% for p in projects %}
+            {% set v = cards_stats.get(p.id, {}).get('vulns', 0) %}
+            {% if v > 0 %}{% set _ = risky.append((v, p)) %}{% endif %}
+        {% endfor %}
+
+        {# ── Linha 1: Superfície de Ataque + Segurança ── #}
+        <div class="row g-3 mb-3">
+
+            {# Card: Superfície de Ataque #}
+            <div class="col-lg-4">
                 <article class="card border-0 shadow-sm h-100">
-                    <header class="card-header bg-white border-0 py-3 px-3">
-                        <h2 class="fw-bold text-primary mb-0 h6" style="font-size: 1.2rem;">
-                            <i class="fas fa-shield-alt me-2" aria-hidden="true"></i>Status de Segurança
+                    <div class="card-body p-4">
+                        <h2 class="fw-bold text-dark mb-4 h6 text-uppercase"
+                            style="letter-spacing:.5px; font-size:.75rem;">
+                            <i class="fas fa-layer-group me-2 text-primary" aria-hidden="true"></i>
+                            Superfície de Ataque
                         </h2>
-                    </header>
-                    <div class="card-body p-3">
+
+                        {# Total de domínios com barra de progresso #}
+                        {% if ns.total_domains > 0 %}
+                            {% set pct_alive = ((ns.total_alive / ns.total_domains) * 100) | round(1) %}
+                            {% set pct_4xx   = ((ns.total_4xx   / ns.total_domains) * 100) | round(1) %}
+                            {% set pct_5xx   = ((ns.total_5xx   / ns.total_domains) * 100) | round(1) %}
+
+                            <div class="mb-4">
+                                <div class="d-flex justify-content-between align-items-end mb-1">
+                                    <span class="text-muted small fw-bold">DISTRIBUIÇÃO HTTP</span>
+                                    <span class="text-muted small">{{ ns.total_domains }} total</span>
+                                </div>
+                                <div class="progress rounded-pill" style="height:10px;">
+                                    <div class="progress-bar bg-success" style="width:{{ pct_alive }}%"
+                                         title="2xx/3xx — Vivos"></div>
+                                    <div class="progress-bar bg-warning" style="width:{{ pct_4xx }}%"
+                                         title="4xx — Client Error"></div>
+                                    <div class="progress-bar bg-danger" style="width:{{ pct_5xx }}%"
+                                         title="5xx — Server Error"></div>
+                                </div>
+                                <div class="d-flex gap-3 mt-2">
+                                    <span class="small"><span class="badge bg-success me-1">&nbsp;</span>{{ ns.total_alive }} vivos</span>
+                                    <span class="small"><span class="badge bg-warning me-1">&nbsp;</span>{{ ns.total_4xx }} 4xx</span>
+                                    <span class="small"><span class="badge bg-danger me-1">&nbsp;</span>{{ ns.total_5xx }} 5xx</span>
+                                </div>
+                            </div>
+                        {% endif %}
+
+                        {# Métricas em grid #}
+                        <div class="row g-2 text-center">
+                            <div class="col-6">
+                                <div class="border rounded p-2">
+                                    <div class="fw-bold fs-5 text-success">{{ ns.total_alive }}</div>
+                                    <div class="text-muted" style="font-size:.72rem;">Hosts Vivos</div>
+                                </div>
+                            </div>
+                            <div class="col-6">
+                                <div class="border rounded p-2">
+                                    <div class="fw-bold fs-5 text-primary">{{ stats.projects }}</div>
+                                    <div class="text-muted" style="font-size:.72rem;">Projetos</div>
+                                </div>
+                            </div>
+                            <div class="col-6">
+                                <div class="border rounded p-2">
+                                    <div class="fw-bold fs-5 {% if ns.total_pending > 0 %}text-warning{% else %}text-success{% endif %}">
+                                        {{ ns.total_pending }}
+                                    </div>
+                                    <div class="text-muted" style="font-size:.72rem;">Pendentes de Scan</div>
+                                </div>
+                            </div>
+                            <div class="col-6">
+                                <div class="border rounded p-2">
+                                    <div class="fw-bold fs-5 {% if stats.running > 0 %}text-primary{% else %}text-muted{% endif %}">
+                                        {{ stats.running }}
+                                    </div>
+                                    <div class="text-muted" style="font-size:.72rem;">Scans Ativos</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </article>
+            </div>
+
+            {# Card: Vulnerabilidades #}
+            <div class="col-lg-4">
+                <article class="card border-0 shadow-sm h-100">
+                    <div class="card-body p-4">
+                        <h2 class="fw-bold text-dark mb-4 h6 text-uppercase"
+                            style="letter-spacing:.5px; font-size:.75rem;">
+                            <i class="fas fa-bug me-2 text-danger" aria-hidden="true"></i>
+                            Vulnerabilidades
+                        </h2>
+
                         {% if stats.vulns > 0 %}
-                            <!-- Critical Severity -->
-                            <div class="d-flex justify-content-between mb-1">
-                                <span class="fw-bold text-danger" style="font-size: 0.9rem;">CRÍTICO</span>
-                                <span class="fw-bold text-dark" style="font-size: 0.9rem;">{{ severity.critical }}</span>
+                            {# Bloco crítico em destaque #}
+                            {% if severity.critical > 0 %}
+                            <div class="alert alert-danger d-flex align-items-center py-2 px-3 mb-3 border-danger" role="alert">
+                                <i class="fas fa-radiation me-2" aria-hidden="true"></i>
+                                <div>
+                                    <strong>{{ severity.critical }} CRÍTICO</strong>
+                                    <span class="small d-block opacity-75">Requer atenção imediata</span>
+                                </div>
                             </div>
-                            <div class="progress mb-2" style="height: 5px;" role="progressbar" aria-label="Vulnerabilidades críticas" aria-valuenow="{{ severity.pct_critical }}" aria-valuemin="0" aria-valuemax="100">
-                                <div class="progress-bar bg-danger" style="width: {{ severity.pct_critical }}%"></div>
+                            {% endif %}
+
+                            {# Barras de severidade #}
+                            {% set sevs = [
+                                ('CRÍTICO',   severity.critical, severity.pct_critical, 'bg-danger',  '#dc3545'),
+                                ('ALTO',       severity.high,     severity.pct_high,     'bg-warning', '#fd7e14'),
+                                ('MÉDIO',      severity.medium,   severity.pct_medium,   'bg-warning', '#ffc107'),
+                                ('BAIXO/INFO', severity.low + severity.info, severity.pct_low, 'bg-info', '#0dcaf0'),
+                            ] %}
+                            {% for label, count, pct, cls, color in sevs %}
+                            <div class="d-flex align-items-center mb-2 gap-2">
+                                <span class="text-muted fw-bold"
+                                      style="font-size:.7rem; width:68px; letter-spacing:.3px;">{{ label }}</span>
+                                <div class="progress flex-grow-1" style="height:6px;">
+                                    <div class="progress-bar {{ cls }}"
+                                         style="width:{{ pct }}%; background-color:{{ color }} !important;"></div>
+                                </div>
+                                <span class="fw-bold text-dark" style="font-size:.85rem; width:24px; text-align:right;">
+                                    {{ count }}
+                                </span>
+                            </div>
+                            {% endfor %}
+
+                            <div class="text-center mt-3 pt-3 border-top">
+                                <span class="display-6 fw-bold text-danger">{{ stats.vulns }}</span>
+                                <span class="text-muted small d-block">vulnerabilidades totais</span>
                             </div>
 
-                            <!-- High Severity -->
-                            <div class="d-flex justify-content-between mb-1">
-                                <span class="fw-bold text-warning" style="font-size: 0.9rem; color: #fd7e14 !important;">ALTO</span>
-                                <span class="fw-bold text-dark" style="font-size: 0.9rem;">{{ severity.high }}</span>
-                            </div>
-                            <div class="progress mb-2" style="height: 5px;" role="progressbar" aria-label="Vulnerabilidades altas" aria-valuenow="{{ severity.pct_high }}" aria-valuemin="0" aria-valuemax="100">
-                                <div class="progress-bar bg-warning" style="width: {{ severity.pct_high }}%; background-color: #fd7e14 !important;"></div>
-                            </div>
-
-                            <!-- Medium Severity -->
-                            <div class="d-flex justify-content-between mb-1">
-                                <span class="fw-bold text-warning" style="font-size: 0.9rem;">MÉDIO</span>
-                                <span class="fw-bold text-dark" style="font-size: 0.9rem;">{{ severity.medium }}</span>
-                            </div>
-                            <div class="progress mb-2" style="height: 5px;" role="progressbar" aria-label="Vulnerabilidades médias" aria-valuenow="{{ severity.pct_medium }}" aria-valuemin="0" aria-valuemax="100">
-                                <div class="progress-bar bg-warning" style="width: {{ severity.pct_medium }}%"></div>
-                            </div>
-
-                            <!-- Low/Info Severity -->
-                            <div class="d-flex justify-content-between mb-1">
-                                <span class="fw-bold text-info" style="font-size: 0.9rem;">BAIXO / INFO</span>
-                                <span class="fw-bold text-dark" style="font-size: 0.9rem;">{{ severity.low + severity.info }}</span>
-                            </div>
-                            <div class="progress" style="height: 5px;" role="progressbar" aria-label="Vulnerabilidades baixas e informativas" aria-valuenow="{{ severity.pct_low }}" aria-valuemin="0" aria-valuemax="100">
-                                <div class="progress-bar bg-info" style="width: {{ severity.pct_low }}%"></div>
-                            </div>
                         {% else %}
-                            <!-- No Vulnerabilities -->
-                            <div class="text-center py-5 text-muted opacity-50">
-                                <i class="fas fa-check-circle fa-2x mb-2 text-success" aria-hidden="true"></i>
-                                <p class="mb-0 small">Sem vulnerabilidades.</p>
+                            <div class="text-center py-4">
+                                <i class="fas fa-shield-alt fa-3x text-success mb-3 d-block opacity-75" aria-hidden="true"></i>
+                                <p class="fw-bold text-success mb-1">Perímetro Seguro</p>
+                                <p class="text-muted small mb-0">Nenhuma vulnerabilidade detectada.</p>
                             </div>
                         {% endif %}
                     </div>
                 </article>
             </div>
 
-            <!-- Recent Activity Card -->
-            <div class="col-lg-6">
+            {# Card: Projetos em Risco + Projetos com Scans Ativos #}
+            <div class="col-lg-4">
                 <article class="card border-0 shadow-sm h-100">
-                    <header class="card-header bg-white border-0 py-3 px-3 d-flex justify-content-between align-items-center">
-                        <h2 class="fw-bold text-primary mb-0 h6" style="font-size: 1.2rem;">
-                            <i class="fas fa-history me-2" aria-hidden="true"></i>Atividade Recente
+                    <div class="card-body p-4">
+                        <h2 class="fw-bold text-dark mb-3 h6 text-uppercase"
+                            style="letter-spacing:.5px; font-size:.75rem;">
+                            <i class="fas fa-exclamation-triangle me-2 text-warning" aria-hidden="true"></i>
+                            Projetos em Risco
                         </h2>
-                        <span class="badge bg-light text-primary border animate-pulse" style="font-size: 0.6rem;" aria-label="Atualização em tempo real">LIVE</span>
-                    </header>
-                    <div class="card-body p-0">
-                        {% if recent_activity %}
-                        <ul class="list-group list-group-flush">
-                            {% for domain in recent_activity %}
-                            <li class="list-group-item border-0 px-3 py-2 d-flex align-items-center {% if not loop.last %}border-bottom{% endif %}">
-                                <div class="me-2" aria-hidden="true">
-                                    <div class="bg-light text-primary rounded-circle d-flex align-items-center justify-content-center"
-                                        style="width: 32px; height: 32px; font-size: 1.3rem;">
-                                        <i class="fas fa-globe"></i>
+
+                        {% if risky %}
+                            {% set risky_sorted = risky | sort(attribute=0, reverse=True) %}
+                            <ul class="list-unstyled mb-0">
+                            {% for vuln_count, p in risky_sorted[:5] %}
+                                {% set pct = ((vuln_count / stats.vulns) * 100) | round if stats.vulns > 0 else 0 %}
+                                <li class="mb-3">
+                                    <div class="d-flex justify-content-between align-items-center mb-1">
+                                        <a href="{{ url_for('main.project_details', id=p.id) }}"
+                                           class="text-dark fw-bold text-decoration-none text-truncate"
+                                           style="max-width:160px; font-size:.85rem;">
+                                            {{ p.name }}
+                                        </a>
+                                        <span class="badge bg-danger rounded-pill">{{ vuln_count }}</span>
                                     </div>
-                                </div>
-                                <div class="flex-grow-1 overflow-hidden">
-                                    <h3 class="mb-0 fw-bold text-dark text-truncate h6" style="font-size: 0.9rem;">
-                                        {{ domain.name }}
-                                    </h3>
-                                    <p class="text-muted d-block text-truncate small mb-0" style="font-size: 0.8rem;">
-                                        {{ domain.project.name }}
-                                    </p>
-                                </div>
-                                <div class="text-end ms-2">
-                                    <time class="text-muted fw-bold d-block small" style="font-size: 0.8rem;" datetime="{{ domain.first_seen.isoformat() }}">
-                                        {{ domain.first_seen.strftime('%H:%M') }}
-                                    </time>
-                                    <span class="badge bg-light text-muted border mt-0"
-                                        style="font-size: 0.7rem; padding: 0.25em 0.4em;"
-                                        aria-label="Status code {{ domain.status_code or 'desconhecido' }}">
-                                        {{ domain.status_code or '-' }}
-                                    </span>
-                                </div>
-                            </li>
+                                    <div class="progress" style="height:4px;">
+                                        <div class="progress-bar bg-danger" style="width:{{ pct }}%;"></div>
+                                    </div>
+                                </li>
                             {% endfor %}
-                        </ul>
+                            </ul>
                         {% else %}
-                        <div class="text-center py-5 text-muted opacity-50">
-                            <i class="fas fa-ghost fa-2x mb-2 mt-2" aria-hidden="true"></i>
-                            <p class="mb-0 small">Sem atividades.</p>
-                        </div>
+                            <div class="text-center py-3 text-muted opacity-50">
+                                <i class="fas fa-check-circle fa-2x mb-2 text-success d-block" aria-hidden="true"></i>
+                                <p class="small mb-0">Nenhum projeto com vulnerabilidades.</p>
+                            </div>
+                        {% endif %}
+
+                        {# Scans ativos #}
+                        {% set active_projects = projects | selectattr('scan_status', 'in', ['Rodando', 'Na fila']) | list %}
+                        {% if active_projects %}
+                        <hr class="my-3">
+                        <p class="text-muted fw-bold text-uppercase mb-2" style="font-size:.7rem; letter-spacing:.3px;">
+                            <i class="fas fa-sync fa-spin me-1 text-primary" aria-hidden="true"></i>
+                            Scans Ativos
+                        </p>
+                        <ul class="list-unstyled mb-0">
+                        {% for p in active_projects[:3] %}
+                            <li class="d-flex align-items-center mb-2">
+                                <span class="badge {% if p.scan_status == 'Rodando' %}bg-primary{% else %}bg-secondary{% endif %} me-2"
+                                      style="font-size:.65rem;">{{ p.scan_status }}</span>
+                                <a href="{{ url_for('main.project_details', id=p.id) }}"
+                                   class="text-dark text-decoration-none text-truncate small fw-bold"
+                                   style="max-width:160px;">{{ p.name }}</a>
+                            </li>
+                        {% endfor %}
+                        </ul>
                         {% endif %}
                     </div>
                 </article>
             </div>
         </div>
+
+        {# ── Linha 2: Atividade Recente + Cobertura de Scan ── #}
+        <div class="row g-3">
+
+            {# Card: Atividade Recente (melhorado) #}
+            <div class="col-lg-8">
+                <article class="card border-0 shadow-sm">
+                    <div class="card-body p-4">
+                        <div class="d-flex justify-content-between align-items-center mb-3">
+                            <h2 class="fw-bold text-dark mb-0 h6 text-uppercase"
+                                style="letter-spacing:.5px; font-size:.75rem;">
+                                <i class="fas fa-history me-2 text-primary" aria-hidden="true"></i>
+                                Subdomínios Descobertos Recentemente
+                            </h2>
+                            <span class="badge bg-primary bg-opacity-10 text-primary border border-primary animate-pulse"
+                                  style="font-size:.65rem;">LIVE</span>
+                        </div>
+
+                        {% if recent_activity %}
+                        <div class="table-responsive" style="max-height:280px; overflow-y:auto;">
+                            <table class="table table-sm table-hover align-middle mb-0">
+                                <thead class="table-light">
+                                    <tr>
+                                        <th class="small text-muted fw-bold text-uppercase border-0" style="font-size:.7rem;">Subdomínio</th>
+                                        <th class="small text-muted fw-bold text-uppercase border-0" style="font-size:.7rem;">Projeto</th>
+                                        <th class="small text-muted fw-bold text-uppercase border-0 text-center" style="font-size:.7rem;">Status</th>
+                                        <th class="small text-muted fw-bold text-uppercase border-0 text-end" style="font-size:.7rem;">Descoberto</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                {% for domain in recent_activity %}
+                                <tr>
+                                    <td>
+                                        <a href="https://{{ domain.name }}"
+                                           target="_blank"
+                                           rel="noopener noreferrer"
+                                           class="fw-bold text-dark text-decoration-none text-truncate d-inline-block"
+                                           style="max-width:260px;"
+                                           aria-label="Abrir {{ domain.name }}">
+                                            {{ domain.name }}
+                                        </a>
+                                    </td>
+                                    <td>
+                                        <a href="{{ url_for('main.project_details', id=domain.project.id) }}"
+                                           class="text-muted text-decoration-none small">
+                                            {{ domain.project.name }}
+                                        </a>
+                                    </td>
+                                    <td class="text-center">
+                                        {% if domain.status_code %}
+                                            {% if domain.status_code < 300 %}
+                                                <span class="badge bg-success bg-opacity-10 text-success border border-success">{{ domain.status_code }}</span>
+                                            {% elif domain.status_code < 400 %}
+                                                <span class="badge bg-info bg-opacity-10 text-info border border-info">{{ domain.status_code }}</span>
+                                            {% elif domain.status_code < 500 %}
+                                                <span class="badge bg-warning bg-opacity-10 text-warning border border-warning">{{ domain.status_code }}</span>
+                                            {% else %}
+                                                <span class="badge bg-danger bg-opacity-10 text-danger border border-danger">{{ domain.status_code }}</span>
+                                            {% endif %}
+                                        {% else %}
+                                            <span class="badge bg-light text-muted border">—</span>
+                                        {% endif %}
+                                    </td>
+                                    <td class="text-end">
+                                        <time class="text-muted small font-monospace"
+                                              datetime="{{ domain.first_seen.isoformat() }}">
+                                            {{ domain.first_seen.strftime('%d/%m %H:%M') }}
+                                        </time>
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                        {% else %}
+                            <div class="text-center py-4 text-muted opacity-50">
+                                <i class="fas fa-inbox fa-2x mb-2 d-block" aria-hidden="true"></i>
+                                <p class="small mb-0">Nenhuma atividade recente.</p>
+                            </div>
+                        {% endif %}
+                    </div>
+                </article>
+            </div>
+
+            {# Card: Cobertura de Scan por Projeto #}
+            <div class="col-lg-4">
+                <article class="card border-0 shadow-sm h-100">
+                    <div class="card-body p-4">
+                        <h2 class="fw-bold text-dark mb-3 h6 text-uppercase"
+                            style="letter-spacing:.5px; font-size:.75rem;">
+                            <i class="fas fa-tasks me-2 text-success" aria-hidden="true"></i>
+                            Cobertura por Projeto
+                        </h2>
+
+                        {% if projects %}
+                        <ul class="list-unstyled mb-0" style="max-height:280px; overflow-y:auto; padding-right:4px;">
+                        {% for p in projects | sort(attribute='name') %}
+                            {% set cs = cards_stats.get(p.id, {}) %}
+                            {% set total = cs.get('total', 0) %}
+                            {% set alive = cs.get('c2xx', 0) + cs.get('c3xx', 0) %}
+                            {% set pending = cs.get('pendentes', 0) %}
+                            {% set scanned = alive - pending %}
+                            {% set pct_scanned = ((scanned / alive) * 100) | round if alive > 0 else 0 %}
+                            <li class="mb-3">
+                                <div class="d-flex justify-content-between align-items-center mb-1">
+                                    <a href="{{ url_for('main.project_details', id=p.id) }}"
+                                       class="text-dark fw-bold text-decoration-none text-truncate"
+                                       style="max-width:155px; font-size:.82rem;">
+                                        {{ p.name }}
+                                    </a>
+                                    <span class="text-muted" style="font-size:.72rem;">
+                                        {{ scanned }}/{{ alive }}
+                                        {% if pending > 0 %}
+                                        <span class="text-warning ms-1">
+                                            <i class="fas fa-exclamation-circle" title="{{ pending }} pendentes" aria-hidden="true"></i>
+                                        </span>
+                                        {% endif %}
+                                    </span>
+                                </div>
+                                <div class="progress rounded-pill" style="height:5px;" title="{{ pct_scanned }}% coberto">
+                                    <div class="progress-bar {% if pct_scanned == 100 %}bg-success{% elif pct_scanned > 50 %}bg-primary{% else %}bg-warning{% endif %}"
+                                         style="width:{{ pct_scanned }}%;"></div>
+                                </div>
+                            </li>
+                        {% endfor %}
+                        </ul>
+                        {% else %}
+                            <div class="text-center py-4 text-muted opacity-50">
+                                <p class="small mb-0">Nenhum projeto criado.</p>
+                            </div>
+                        {% endif %}
+                    </div>
+                </article>
+            </div>
+
+        </div>
     </div>
 
-    <!-- Projects Tab -->
+        <!-- Projects Tab -->
     <div class="tab-pane fade" 
          id="projects-pane" 
          role="tabpanel" 

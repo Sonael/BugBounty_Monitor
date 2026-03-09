@@ -579,6 +579,10 @@ def scan_cmseek(target_url):
     return None
 
 
+# Tempo máximo por scan FFuf — configurável via .env
+FFUF_MAXTIME = int(os.environ.get('FFUF_MAXTIME', 90))   # segundos por host
+
+
 def scan_ffuf(target_url):
     try:
         target_url = _sanitize_url(target_url)
@@ -586,12 +590,16 @@ def scan_ffuf(target_url):
         print(str(e))
         return []
 
-    print(f"[SCANNER] FFuf em {target_url}...")
+    print(f"[SCANNER] FFuf em {target_url} (max {FFUF_MAXTIME}s)...")
     output = f"ffuf_{uuid.uuid4().hex}.json"
     run_command(
         f"ffuf -u {target_url}/FUZZ -w /opt/wordlists/common.txt "
-        f"-mc 200,204,301,302,307,403 -o {output} -of json -s -t 50 -ac",
-        timeout=1800,
+        f"-mc 200,204,301,302,307,403 -o {output} -of json -s "
+        f"-t 40 -ac "
+        f"-timeout 8 "           # timeout de conexão por requisição (segundos)
+        f"-maxtime {FFUF_MAXTIME} "   # para o scan inteiro após N segundos
+        f"-maxtime-job {FFUF_MAXTIME}",  # para cada job individual
+        timeout=FFUF_MAXTIME + 15,   # processo tem +15s de margem antes do SIGKILL
     )
 
     paths = []

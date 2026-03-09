@@ -327,8 +327,8 @@
                             <i class="fas fa-sync fa-spin me-1 text-primary" aria-hidden="true"></i>
                             Scans Ativos
                         </p>
-                        <ul class="list-unstyled mb-0" style="max-height:150px; overflow-y:auto; padding-right:4px;">
-                        {% for p in active_projects %}
+                        <ul class="list-unstyled mb-0">
+                        {% for p in active_projects[:3] %}
                             <li class="d-flex align-items-center mb-2">
                                 <span class="badge {% if p.scan_status == 'Rodando' %}bg-primary{% else %}bg-secondary{% endif %} me-2"
                                       style="font-size:.65rem;">{{ p.scan_status }}</span>
@@ -513,103 +513,122 @@
                             </header>
 
                             <div class="modal-body p-4">
-                                <div class="row">
-                                    <div class="col-md-6 mb-3">
+                                {# ── Identidade ── #}
+                                <div class="row g-3 mb-4">
+                                    <div class="col-md-6">
                                         <label for="edit_name_{{ project.id }}" class="form-label fw-bold">Nome do Projeto</label>
-                                        <input type="text" 
+                                        <input type="text"
                                                id="edit_name_{{ project.id }}"
-                                               name="name" 
-                                               class="form-control" 
+                                               name="name"
+                                               class="form-control"
                                                value="{{ project.name }}"
                                                required>
                                     </div>
-                                    <div class="col-md-6 mb-3">
-                                        <label for="edit_url_{{ project.id }}" class="form-label fw-bold">Domínio Principal (Escopo)</label>
+                                    <div class="col-md-6">
+                                        <label for="edit_url_{{ project.id }}" class="form-label fw-bold">Domínio Principal</label>
                                         <div class="input-group">
-                                            <span class="input-group-text bg-light">
-                                                <i class="fas fa-globe" aria-hidden="true"></i>
-                                            </span>
-                                            <input type="text" 
+                                            <span class="input-group-text bg-light text-muted" style="font-size:.85rem;">https://</span>
+                                            <input type="text"
                                                    id="edit_url_{{ project.id }}"
-                                                   name="target_url" 
+                                                   name="target_url"
                                                    class="form-control"
-                                                   value="{{ project.target_url }}" 
-                                                   required>
+                                                   value="{{ project.target_url }}"
+                                                   required
+                                                   oninput="this.value=this.value.replace(/^https?:\/\//,'')">
                                         </div>
                                     </div>
                                 </div>
 
-                                <hr class="my-4 text-muted">
-
-                                <!-- Configuration Toggles -->
-                                <div class="mb-3 p-3 bg-light rounded border">
-                                    <div class="form-check form-switch">
-                                        <input class="form-check-input" 
-                                               type="checkbox" 
-                                               name="auto_discovery" 
-                                               {% if project.discovery_enabled %}checked{% endif %}>
-                                        <label class="form-check-label fw-bold">Habilitar Descoberta Automática</label>
+                                {# ── Toggles 2x2 ── #}
+                                <h6 class="fw-bold text-muted text-uppercase mb-3" style="font-size:.75rem; letter-spacing:.5px;">
+                                    Configurações de Scan
+                                </h6>
+                                <div class="row g-3 mb-4">
+                                    <div class="col-md-6">
+                                        <div class="p-3 rounded border border-success bg-success bg-opacity-10 h-100">
+                                            <div class="form-check form-switch mb-2">
+                                                <input class="form-check-input" type="checkbox"
+                                                       name="auto_discovery"
+                                                       {% if project.discovery_enabled %}checked{% endif %}>
+                                                <label class="form-check-label fw-bold text-success">
+                                                    <i class="fas fa-search me-1"></i>Descoberta Automática
+                                                </label>
+                                            </div>
+                                            <p class="text-muted small mb-0">Subfinder + Amass para encontrar subdomínios.</p>
+                                        </div>
+                                    </div>
+                                    <div class="col-md-6">
+                                        <div class="p-3 rounded border border-warning h-100">
+                                            <div class="form-check form-switch mb-2">
+                                                <input class="form-check-input" type="checkbox"
+                                                       name="enable_fuzzing"
+                                                       {% if project.fuzzing_enabled %}checked{% endif %}>
+                                                <label class="form-check-label fw-bold">
+                                                    <i class="fas fa-folder-open me-1 text-warning"></i>Fuzzing (FFuf)
+                                                </label>
+                                            </div>
+                                            <p class="text-muted small mb-0">Busca diretórios ocultos em cada host. <span class="text-warning fw-bold">+~90s/host.</span></p>
+                                        </div>
+                                    </div>
+                                    <div class="col-md-6">
+                                        <div class="p-3 rounded border border-danger h-100">
+                                            <div class="form-check form-switch mb-2">
+                                                <input class="form-check-input" type="checkbox"
+                                                       name="enable_vuln_scan"
+                                                       {% if project.vuln_scan_enabled %}checked{% endif %}>
+                                                <label class="form-check-label fw-bold text-danger">
+                                                    <i class="fas fa-bug me-1"></i>Scan Vuln no Baseline
+                                                </label>
+                                            </div>
+                                            <p class="text-muted small mb-0">Nuclei + Dalfox + SQLMap no baseline. <span class="text-danger fw-bold">Pode levar horas.</span></p>
+                                        </div>
+                                    </div>
+                                    <div class="col-md-6">
+                                        <div class="p-3 rounded border border-danger h-100">
+                                            <div class="form-check form-switch mb-2">
+                                                <input class="form-check-input" type="checkbox"
+                                                       name="enable_vuln_recon"
+                                                       {% if project.vuln_scan_recon_enabled %}checked{% endif %}>
+                                                <label class="form-check-label fw-bold text-danger">
+                                                    <i class="fas fa-radiation me-1"></i>Scan Vuln no Recon (Full)
+                                                </label>
+                                            </div>
+                                            <p class="text-muted small mb-0">Busca falhas após recon. <span class="text-danger fw-bold">Só se o programa permitir.</span></p>
+                                        </div>
                                     </div>
                                 </div>
 
-                                <div class="mb-3 p-3 bg-light rounded border">
-                                    <div class="form-check form-switch">
-                                        <input class="form-check-input" 
-                                               type="checkbox" 
-                                               name="enable_vuln_recon" 
-                                               {% if project.vuln_scan_recon_enabled %}checked{% endif %}>
-                                        <label class="form-check-label fw-bold text-danger">Habilitar Scan de Vuln no Recon (Full Scan)</label>
-                                    </div>
-                                </div>
-
-                                <div class="mb-3 p-3 bg-light rounded border">
-                                    <div class="form-check form-switch">
-                                        <input class="form-check-input" 
-                                               type="checkbox" 
-                                               name="enable_fuzzing" 
-                                               {% if project.fuzzing_enabled %}checked{% endif %}>
-                                        <label class="form-check-label fw-bold text-warning">Habilitar Fuzzing (FFuf) no baseline</label>
-                                    </div>
-                                </div>
-
-                                <div class="mb-4 p-3 bg-light rounded border">
-                                    <div class="form-check form-switch">
-                                        <input class="form-check-input" 
-                                               type="checkbox" 
-                                               name="enable_vuln_scan" 
-                                               {% if project.vuln_scan_enabled %}checked{% endif %}>
-                                        <label class="form-check-label fw-bold text-danger">Habilitar Scan de Vuln no Baseline</label>
-                                    </div>
-                                </div>
-
-                                <!-- Scope Configuration -->
-                                <div class="row">
-                                    <div class="col-md-6 mb-3">
+                                {# ── Escopo ── #}
+                                <h6 class="fw-bold text-muted text-uppercase mb-3" style="font-size:.75rem; letter-spacing:.5px;">
+                                    Controle de Escopo
+                                </h6>
+                                <div class="row g-3">
+                                    <div class="col-md-6">
                                         <label class="form-label fw-bold text-success">
-                                            <i class="fas fa-plus-circle me-1" aria-hidden="true"></i>
-                                            Adicionar ao Escopo (Manual)
+                                            <i class="fas fa-plus-circle me-1"></i>In Scope (Manual)
                                         </label>
-                                        <textarea name="in_scope" 
-                                                  class="form-control font-monospace small" 
+                                        <textarea name="in_scope"
+                                                  class="form-control font-monospace small"
                                                   rows="5"
-                                                  placeholder="Digite novos domínios aqui...">{{ project.in_scope or '' }}</textarea>
-                                        <div class="form-text">
-                                            Domínios digitados aqui serão <strong>escaneados</strong>.<br>
-                                            Não usar Wildcards(*).
+                                                  placeholder="login.alvo.com&#10;api.alvo.com"
+                                                  oninput="countLines(this,'edit_in_{{ project.id }}')">{{ project.in_scope or '' }}</textarea>
+                                        <div class="d-flex justify-content-between mt-1">
+                                            <span class="form-text">Um domínio por linha. Sem wildcards.</span>
+                                            <span class="form-text" id="edit_in_{{ project.id }}">{{ (project.in_scope or '').splitlines() | length }} linhas</span>
                                         </div>
                                     </div>
-
-                                    <div class="col-md-6 mb-3">
+                                    <div class="col-md-6">
                                         <label class="form-label fw-bold text-danger">
-                                            <i class="fas fa-ban me-1" aria-hidden="true"></i>
-                                            Out of Scope (Ignorar)
+                                            <i class="fas fa-ban me-1"></i>Out of Scope (Ignorar)
                                         </label>
-                                        <textarea name="out_of_scope" 
+                                        <textarea name="out_of_scope"
                                                   class="form-control font-monospace small"
-                                                  rows="5">{{ project.out_of_scope or '' }}</textarea>
-                                        <div class="form-text">
-                                            Estes domínios serão <strong>ignorados</strong> pelo scanner.<br>
-                                            Pode usar Wildcards(*).
+                                                  rows="5"
+                                                  placeholder="store.alvo.com&#10;*.cdn.alvo.com"
+                                                  oninput="countLines(this,'edit_out_{{ project.id }}')">{{ project.out_of_scope or '' }}</textarea>
+                                        <div class="d-flex justify-content-between mt-1">
+                                            <span class="form-text">Suporta wildcards: <code>*.cdn.alvo.com</code></span>
+                                            <span class="form-text" id="edit_out_{{ project.id }}">{{ (project.out_of_scope or '').splitlines() | length }} linhas</span>
                                         </div>
                                     </div>
                                 </div>
@@ -617,7 +636,9 @@
 
                             <footer class="modal-footer bg-light">
                                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
-                                <button type="submit" class="btn btn-primary fw-bold px-4">Salvar Alterações</button>
+                                <button type="submit" class="btn btn-primary fw-bold px-4">
+                                    <i class="fas fa-save me-2"></i>Salvar Alterações
+                                </button>
                             </footer>
                         </div>
                     </form>
@@ -678,182 +699,220 @@
 </div>
 
 <!-- New Project Modal -->
-<div class="modal fade" 
-     id="newProjectModal" 
+<div class="modal fade"
+     id="newProjectModal"
      tabindex="-1"
      aria-labelledby="newProjectModalLabel"
      aria-hidden="true">
-    <div class="modal-dialog modal-lg">
-        <form method="POST" action="{{ url_for('main.add_project') }}">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <form method="POST" action="{{ url_for('main.add_project') }}" id="newProjectForm">
             <div class="modal-content border-0 shadow-lg">
+
                 <header class="modal-header bg-primary text-white">
                     <h2 class="modal-title fw-bold h5" id="newProjectModalLabel">
                         <i class="fas fa-plus-circle me-2" aria-hidden="true"></i>Adicionar Novo Alvo
                     </h2>
-                    <button type="button" 
-                            class="btn-close btn-close-white" 
-                            data-bs-dismiss="modal"
-                            aria-label="Fechar modal"></button>
+                    <button type="button" class="btn-close btn-close-white"
+                            data-bs-dismiss="modal" aria-label="Fechar"></button>
                 </header>
 
                 <div class="modal-body p-4">
-                    <div class="row">
-                        <div class="col-md-6 mb-3">
-                            <label for="new_project_name" class="form-label fw-bold">Nome do Projeto</label>
-                            <input type="text" 
+
+                    {# ── Identidade ── #}
+                    <div class="row g-3 mb-4">
+                        <div class="col-md-6">
+                            <label for="new_project_name" class="form-label fw-bold">
+                                Nome do Projeto
+                                <span class="text-danger" aria-label="obrigatório">*</span>
+                            </label>
+                            <input type="text"
                                    id="new_project_name"
-                                   name="name" 
+                                   name="name"
                                    class="form-control"
-                                   placeholder="Ex: Programa BugBounty X" 
+                                   placeholder="Ex: BugBounty Empresa X"
                                    required>
                         </div>
-                        <div class="col-md-6 mb-3">
-                            <label for="new_target_url" class="form-label fw-bold">Domínio Principal (Escopo)</label>
+                        <div class="col-md-6">
+                            <label for="new_target_url" class="form-label fw-bold">
+                                Domínio Principal
+                                <span class="text-danger" aria-label="obrigatório">*</span>
+                            </label>
                             <div class="input-group">
-                                <span class="input-group-text bg-light">
-                                    <i class="fas fa-globe" aria-hidden="true"></i>
-                                </span>
-                                <input type="text" 
+                                <span class="input-group-text bg-light text-muted" style="font-size:.85rem;">https://</span>
+                                <input type="text"
                                        id="new_target_url"
-                                       name="target_url" 
-                                       class="form-control" 
-                                       placeholder="Ex: alvo.com"
-                                       required>
+                                       name="target_url"
+                                       class="form-control"
+                                       placeholder="alvo.com"
+                                       required
+                                       oninput="this.value=this.value.replace(/^https?:\/\//,'')">
                             </div>
-                            <div class="form-text text-muted">Não inclua http:// ou https://</div>
+                            <div class="form-text text-muted" style="font-size:.75rem;">
+                                Somente o domínio, sem http:// ou caminhos.
+                            </div>
                         </div>
                     </div>
 
-                    <hr class="my-4 text-muted">
+                    {# ── Banner modo inicial ── #}
+                    <div class="alert alert-primary d-flex align-items-center gap-2 py-2 px-3 mb-4" role="note">
+                        <i class="fas fa-info-circle flex-shrink-0" aria-hidden="true"></i>
+                        <span class="small">
+                            Este projeto iniciará automaticamente com <strong>Baseline</strong>
+                            (coleta de subdomínios). Scans adicionais podem ser disparados depois.
+                        </span>
+                    </div>
 
-                    <!-- Auto Discovery Toggle -->
-                    <div class="mb-3 p-3 bg-light rounded border border-success">
-                        <div class="form-check form-switch">
-                            <input class="form-check-input" 
-                                   type="checkbox" 
-                                   id="autoDiscoverySwitch"
-                                   name="auto_discovery" 
-                                   checked>
-                            <label class="form-check-label fw-bold" for="autoDiscoverySwitch">
-                                Habilitar Descoberta Automática
-                            </label>
-                        </div>
-                        <div class="form-text small mt-2">
-                            <span id="discoveryTextOn" class="text-success">
-                                <i class="fas fa-magic me-1" aria-hidden="true"></i>
-                                O sistema irá rodar <strong>Subfinder e Amass</strong> para encontrar novos subdomínios.
-                            </span>
-                            <span id="discoveryTextOff" class="text-secondary d-none">
-                                <i class="fas fa-hand-paper me-1" aria-hidden="true"></i>
-                                O sistema usará <strong>apenas</strong> os domínios listados em "In Scope".
-                            </span>
+                    {# ── Estimador dinâmico ── #}
+                    <div class="bg-light border rounded p-3 mb-4 d-flex align-items-start gap-3">
+                        <i class="fas fa-stopwatch text-muted mt-1 flex-shrink-0" aria-hidden="true"></i>
+                        <div>
+                            <p class="fw-bold mb-1 small text-muted text-uppercase" style="letter-spacing:.4px;">
+                                Estimativa de Duração do Baseline
+                            </p>
+                            <p id="new_time_estimate" class="mb-0 small text-dark">
+                                Aprox. <strong>10–30 min</strong> — Descoberta + verificação de hosts.
+                            </p>
                         </div>
                     </div>
 
-                    <!-- Vuln Scan on Recon -->
-                    <div class="mb-4 p-3 bg-white rounded border border-danger">
-                        <div class="form-check form-switch">
-                            <input class="form-check-input" 
-                                   type="checkbox" 
-                                   id="vulnReconSwitch"
-                                   name="enable_vuln_recon" 
-                                   checked>
-                            <label class="form-check-label fw-bold text-danger" for="vulnReconSwitch">
-                                Scan de Vuln no Recon (Full Scan)
-                            </label>
+                    {# ── Toggles 2x2 ── #}
+                    <h6 class="fw-bold text-muted text-uppercase mb-3" style="font-size:.75rem; letter-spacing:.5px;">
+                        Configurações de Scan
+                    </h6>
+
+                    <div class="row g-3 mb-4">
+
+                        {# Discovery — VERDE (seguro) #}
+                        <div class="col-md-6">
+                            <div class="p-3 rounded border border-success bg-success bg-opacity-10 h-100">
+                                <div class="form-check form-switch mb-2">
+                                    <input class="form-check-input" type="checkbox"
+                                           id="new_autoDiscovery" name="auto_discovery"
+                                           checked onchange="updateNewEstimate()">
+                                    <label class="form-check-label fw-bold text-success" for="new_autoDiscovery">
+                                        <i class="fas fa-search me-1" aria-hidden="true"></i>
+                                        Descoberta Automática
+                                    </label>
+                                </div>
+                                <p class="text-muted small mb-0">
+                                    Roda <strong>Subfinder + Amass</strong> para encontrar subdomínios.
+                                    Se desativado, usa apenas o In Scope manual.
+                                </p>
+                            </div>
                         </div>
-                        <div class="form-text text-muted small mt-1">
-                            <i class="fas fa-biohazard me-1" aria-hidden="true"></i>
-                            Se marcado, buscará falhas <strong>imediatamente</strong> após descobrir novos subdomínios.
-                            <br><span class="text-danger fw-bold">
-                                <i class="fas fa-exclamation-circle me-1" aria-hidden="true"></i>
-                                Caso a empresa não permita scan de vulnerabilidades com ferramentas, desative esta opção.
-                            </span>
+
+                        {# Fuzzing — AMARELO (moderado) #}
+                        <div class="col-md-6">
+                            <div class="p-3 rounded border border-warning h-100">
+                                <div class="form-check form-switch mb-2">
+                                    <input class="form-check-input" type="checkbox"
+                                           id="new_fuzzingSwitch" name="enable_fuzzing"
+                                           onchange="updateNewEstimate()">
+                                    <label class="form-check-label fw-bold" for="new_fuzzingSwitch">
+                                        <i class="fas fa-folder-open me-1 text-warning" aria-hidden="true"></i>
+                                        Fuzzing de Diretórios (FFuf)
+                                    </label>
+                                </div>
+                                <p class="text-muted small mb-0">
+                                    Busca diretórios ocultos (<code>/.git</code>, <code>/admin</code>) em cada host.
+                                    <span class="text-warning fw-bold d-block mt-1">
+                                        <i class="fas fa-clock me-1"></i>Adiciona ~90s por host vivo.
+                                    </span>
+                                </p>
+                            </div>
+                        </div>
+
+                        {# Vuln no Baseline — VERMELHO (perigoso) #}
+                        <div class="col-md-6">
+                            <div class="p-3 rounded border border-danger h-100">
+                                <div class="form-check form-switch mb-2">
+                                    <input class="form-check-input" type="checkbox"
+                                           id="new_vulnSwitch" name="enable_vuln_scan"
+                                           onchange="updateNewEstimate()">
+                                    <label class="form-check-label fw-bold text-danger" for="new_vulnSwitch">
+                                        <i class="fas fa-bug me-1" aria-hidden="true"></i>
+                                        Scan de Vuln no Baseline
+                                    </label>
+                                </div>
+                                <p class="text-muted small mb-0">
+                                    Roda <strong>Nuclei + Dalfox + SQLMap</strong> logo na criação.
+                                    <span class="text-danger fw-bold d-block mt-1">
+                                        <i class="fas fa-exclamation-triangle me-1"></i>Pode levar horas.
+                                    </span>
+                                </p>
+                            </div>
+                        </div>
+
+                        {# Vuln no Recon — VERMELHO (perigoso, off por padrão) #}
+                        <div class="col-md-6">
+                            <div class="p-3 rounded border border-danger h-100">
+                                <div class="form-check form-switch mb-2">
+                                    <input class="form-check-input" type="checkbox"
+                                           id="new_vulnReconSwitch" name="enable_vuln_recon"
+                                           onchange="updateNewEstimate()">
+                                    <label class="form-check-label fw-bold text-danger" for="new_vulnReconSwitch">
+                                        <i class="fas fa-radiation me-1" aria-hidden="true"></i>
+                                        Scan de Vuln no Recon (Full)
+                                    </label>
+                                </div>
+                                <p class="text-muted small mb-0">
+                                    Busca falhas após cada recon. Ative só se o programa <strong>permitir</strong> ferramentas de scan.
+                                    <span class="text-danger fw-bold d-block mt-1">
+                                        <i class="fas fa-shield-alt me-1"></i>Desativado por padrão.
+                                    </span>
+                                </p>
+                            </div>
                         </div>
                     </div>
 
-                    <!-- Fuzzing Toggle -->
-                    <div class="mb-4 p-3 bg-light rounded border border-warning">
-                        <div class="form-check form-switch">
-                            <input class="form-check-input" 
-                                   type="checkbox" 
-                                   id="fuzzingSwitch"
-                                   name="enable_fuzzing">
-                            <label class="form-check-label fw-bold" for="fuzzingSwitch">
-                                Habilitar Fuzzing no Baseline (FFuf)
-                            </label>
-                        </div>
-                        <div class="form-text small mt-2">
-                            <i class="fas fa-search-plus me-1" aria-hidden="true"></i>
-                            Se marcado, o sistema irá buscar diretórios ocultos (ex: /.git, /admin) logo na criação do projeto.
-                            <span class="text-warning d-block mt-1 fw-bold">
-                                <i class="fas fa-clock me-1" aria-hidden="true"></i>
-                                Isso tornará a criação do projeto mais lenta.
-                            </span>
-                        </div>
-                    </div>
-
-                    <!-- Vuln Scan on Baseline -->
-                    <div class="mb-4 p-3 bg-light rounded border border-danger">
-                        <div class="form-check form-switch">
-                            <input class="form-check-input" 
-                                   type="checkbox" 
-                                   id="vulnSwitch" 
-                                   name="enable_vuln_scan">
-                            <label class="form-check-label fw-bold" for="vulnSwitch">
-                                Habilitar Scan de Vuln no Baseline
-                            </label>
-                        </div>
-                        <div class="form-text small mt-2">
-                            <i class="fas fa-radiation me-1" aria-hidden="true"></i>
-                            Se marcado, o sistema rodará <strong>Nuclei, XSS e SQLMap</strong> em todos os domínios encontrados agora no baseline.
-                            <span class="text-danger d-block mt-1 fw-bold">
-                                <i class="fas fa-exclamation-circle me-1" aria-hidden="true"></i>
-                                Isso tornará o scan inicial extremamente longo.
-                            </span>
-                        </div>
-                    </div>
-
-                    <!-- Scope Configuration -->
-                    <div class="row">
-                        <div class="col-md-6 mb-3">
+                    {# ── Escopo ── #}
+                    <h6 class="fw-bold text-muted text-uppercase mb-3" style="font-size:.75rem; letter-spacing:.5px;">
+                        Controle de Escopo
+                    </h6>
+                    <div class="row g-3">
+                        <div class="col-md-6">
                             <label for="new_in_scope" class="form-label fw-bold text-success">
                                 <i class="fas fa-plus-circle me-1" aria-hidden="true"></i>
-                                Adicionar ao Escopo (Manual)
+                                In Scope (Manual)
                             </label>
                             <textarea id="new_in_scope"
-                                      name="in_scope" 
-                                      class="form-control font-monospace small" 
+                                      name="in_scope"
+                                      class="form-control font-monospace small"
                                       rows="5"
-                                      placeholder="login.alvo.com&#10;blog.alvo.com"></textarea>
-                            <div class="form-text">
-                                Domínios digitados aqui serão <strong>escaneados</strong>.<br>
-                                Não usar Wildcards(*).
+                                      placeholder="login.alvo.com&#10;api.alvo.com&#10;blog.alvo.com"
+                                      oninput="countLines(this,'new_in_scope_count')"></textarea>
+                            <div class="d-flex justify-content-between mt-1">
+                                <span class="form-text">Um domínio por linha. Sem wildcards.</span>
+                                <span class="form-text" id="new_in_scope_count">0 linhas</span>
                             </div>
                         </div>
-
-                        <div class="col-md-6 mb-3">
+                        <div class="col-md-6">
                             <label for="new_out_scope" class="form-label fw-bold text-danger">
                                 <i class="fas fa-ban me-1" aria-hidden="true"></i>
-                                Out of Scope
+                                Out of Scope (Ignorar)
                             </label>
                             <textarea id="new_out_scope"
-                                      name="out_of_scope" 
-                                      class="form-control font-monospace small" 
+                                      name="out_of_scope"
+                                      class="form-control font-monospace small"
                                       rows="5"
-                                      placeholder="store.alvo.com&#10;mail.alvo.com"></textarea>
-                            <div class="form-text">
-                                Estes domínios serão <strong>ignorados</strong> pelo scanner.<br>
-                                Pode usar Wildcards(*).
+                                      placeholder="store.alvo.com&#10;mail.alvo.com&#10;*.cdn.alvo.com"
+                                      oninput="countLines(this,'new_out_scope_count')"></textarea>
+                            <div class="d-flex justify-content-between mt-1">
+                                <span class="form-text">Suporta wildcards: <code>*.cdn.alvo.com</code></span>
+                                <span class="form-text" id="new_out_scope_count">0 linhas</span>
                             </div>
                         </div>
                     </div>
+
                 </div>
 
                 <footer class="modal-footer bg-light">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
-                    <button type="submit" class="btn btn-primary fw-bold px-4">Criar Projeto</button>
+                    <button type="submit" class="btn btn-primary fw-bold px-4">
+                        <i class="fas fa-rocket me-2" aria-hidden="true"></i>Criar e Iniciar Baseline
+                    </button>
                 </footer>
+
             </div>
         </form>
     </div>
@@ -863,18 +922,43 @@
 
 {% block scripts %}
 <script>
-    // Auto Discovery Switch Handler
-    document.getElementById('autoDiscoverySwitch').addEventListener('change', function() {
-        const textOn = document.getElementById('discoveryTextOn');
-        const textOff = document.getElementById('discoveryTextOff');
-        
-        if (this.checked) {
-            textOn.classList.remove('d-none');
-            textOff.classList.add('d-none');
+    // ── Contador de linhas ao vivo ──────────────────────────────────
+    window.countLines = function(textarea, counterId) {
+        const lines = textarea.value.split('\n').filter(l => l.trim().length > 0).length;
+        const el = document.getElementById(counterId);
+        if (el) el.textContent = lines + (lines === 1 ? ' linha' : ' linhas');
+    };
+
+    // ── Estimador de tempo dinâmico (modal novo projeto) ─────────
+    window.updateNewEstimate = function() {
+        const discovery = document.getElementById('new_autoDiscovery')?.checked;
+        const fuzzing   = document.getElementById('new_fuzzingSwitch')?.checked;
+        const vulnBase  = document.getElementById('new_vulnSwitch')?.checked;
+        const vulnRecon = document.getElementById('new_vulnReconSwitch')?.checked;
+        const el        = document.getElementById('new_time_estimate');
+        if (!el) return;
+
+        let msg = '';
+        if (vulnBase || vulnRecon) {
+            msg = 'Aprox. <strong>várias horas</strong> — Recon + Scan de Vulnerabilidades completo.';
+        } else if (fuzzing && discovery) {
+            msg = 'Aprox. <strong>1–3 horas</strong> — Recon + Fuzzing de diretórios em cada host.';
+        } else if (fuzzing) {
+            msg = 'Aprox. <strong>30–90 min</strong> — Verificação + Fuzzing nos hosts do In Scope.';
+        } else if (discovery) {
+            msg = 'Aprox. <strong>10–30 min</strong> — Descoberta + verificação de hosts.';
         } else {
-            textOn.classList.add('d-none');
-            textOff.classList.remove('d-none');
+            msg = 'Aprox. <strong>5–15 min</strong> — Apenas verificação do In Scope manual.';
         }
+        el.innerHTML = 'Aprox. ' + msg.replace('Aprox. ', '');
+    };
+
+    // Inicializa contadores nos modais de edição ao abrir
+    document.addEventListener('show.bs.modal', function(e) {
+        e.target.querySelectorAll('textarea[oninput]').forEach(ta => {
+            const match = ta.getAttribute('oninput').match(/'([^']+)'/);
+            if (match) window.countLines(ta, match[1]);
+        });
     });
 
     // Countdown Timer for Next Scan

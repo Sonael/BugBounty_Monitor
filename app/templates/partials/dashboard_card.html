@@ -1,10 +1,9 @@
 {# ─────────────────────────────────────────────────────────────────────────
    dashboard_card.html
-   Usa card_stats pré-calculado via SQL na rota — sem iterar project.domains.
    card_stats = { total, c2xx, c3xx, c4xx, c5xx, pendentes, vulns }
    ───────────────────────────────────────────────────────────────────────── #}
 
-{% set cs = card_stats if card_stats is defined else {} %}
+{% set cs          = card_stats if card_stats is defined else {} %}
 {% set total       = cs.get('total',     0) if cs else 0 %}
 {% set count_2xx   = cs.get('c2xx',      0) if cs else 0 %}
 {% set count_3xx   = cs.get('c3xx',      0) if cs else 0 %}
@@ -12,8 +11,33 @@
 {% set count_5xx   = cs.get('c5xx',      0) if cs else 0 %}
 {% set pendentes   = cs.get('pendentes', 0) if cs else 0 %}
 {% set total_vulns = cs.get('vulns',     0) if cs else 0 %}
+{% set alive       = count_2xx + count_3xx %}
+{% set scanned     = [alive - pendentes, 0] | max %}
+{% set pct_cov     = ((scanned / alive * 100) | round | int) if alive > 0 else 0 %}
 
 {% set refresh_rate = 'every 5s' if project.scan_status in ['Rodando', 'Na fila'] else 'every 120s' %}
+
+{# Dias desde o último scan #}
+{% set days_old = none %}
+{% if project.last_scan_date %}
+    {% set delta = (now - project.last_scan_date).days if now is defined else none %}
+    {% set days_old = delta %}
+{% endif %}
+
+{# Borda do card baseada no estado #}
+{% if project.scan_status == 'Concluído' %}
+    {% set card_border = 'border-success border-opacity-50' %}
+    {% set card_extra  = 'border' %}
+{% elif project.scan_status == 'Erro' %}
+    {% set card_border = 'border-danger border-opacity-50' %}
+    {% set card_extra  = 'border' %}
+{% elif project.scan_status in ['Rodando', 'Na fila'] %}
+    {% set card_border = 'border-primary border-opacity-25' %}
+    {% set card_extra  = 'border' %}
+{% else %}
+    {% set card_border = '' %}
+    {% set card_extra  = '' %}
+{% endif %}
 
 <div class="col-md-4 mb-4"
      id="project-card-{{ project.id }}"
@@ -21,31 +45,49 @@
      hx-trigger="{{ refresh_rate }}"
      hx-swap="outerHTML">
 
-    <article class="card h-100 project-card border-0 shadow-sm position-relative">
+    <article class="card h-100 project-card border-0 shadow-sm position-relative {{ card_extra }} {{ card_border }}">
         <div class="card-body p-4 d-flex flex-column h-100">
 
-            <header class="d-flex justify-content-between align-items-start mb-3">
-                {% if project.scan_status == 'Rodando' %}
-                    <span class="badge bg-primary bg-opacity-10 text-primary border border-primary rounded-pill animate-pulse" role="status">
-                        <i class="fas fa-sync fa-spin me-1" aria-hidden="true"></i>Rodando
-                    </span>
-                {% elif project.scan_status == 'Na fila' %}
-                    <span class="badge bg-secondary bg-opacity-10 text-secondary border border-secondary rounded-pill animate-pulse" role="status">
-                        <i class="fas fa-hourglass-half me-1" aria-hidden="true"></i>Na fila
-                    </span>
-                {% elif project.scan_status == 'Erro' %}
-                    <span class="badge bg-danger bg-opacity-10 text-danger border border-danger rounded-pill" role="status">
-                        <i class="fas fa-exclamation-circle me-1" aria-hidden="true"></i>Erro
-                    </span>
-                {% else %}
-                    <span class="badge bg-light text-secondary border rounded-pill" role="status">
-                        {% if project.scan_status == 'Concluído' %}
-                            <i class="fas fa-check-circle me-1 text-success" aria-hidden="true"></i>Pronto
-                        {% else %}
+            {# ── Header: status + ações ── #}
+            <header class="d-flex justify-content-between align-items-start mb-2">
+                <div class="d-flex align-items-center gap-2 flex-wrap">
+                    {% if project.scan_status == 'Rodando' %}
+                        <span class="badge bg-primary bg-opacity-10 text-primary border border-primary rounded-pill animate-pulse" role="status">
+                            <i class="fas fa-sync fa-spin me-1" aria-hidden="true"></i>Rodando
+                        </span>
+                    {% elif project.scan_status == 'Na fila' %}
+                        <span class="badge bg-secondary bg-opacity-10 text-secondary border border-secondary rounded-pill animate-pulse" role="status">
+                            <i class="fas fa-hourglass-half me-1" aria-hidden="true"></i>Na fila
+                        </span>
+                    {% elif project.scan_status == 'Erro' %}
+                        <span class="badge bg-danger bg-opacity-10 text-danger border border-danger rounded-pill" role="status">
+                            <i class="fas fa-exclamation-circle me-1" aria-hidden="true"></i>Erro
+                        </span>
+                    {% elif project.scan_status == 'Concluído' %}
+                        <span class="badge bg-success bg-opacity-10 text-success border border-success rounded-pill" role="status">
+                            <i class="fas fa-check-circle me-1" aria-hidden="true"></i>Pronto
+                        </span>
+                    {% else %}
+                        <span class="badge bg-light text-secondary border rounded-pill" role="status">
                             <i class="fas fa-pause-circle me-1" aria-hidden="true"></i>Parado
+                        </span>
+                    {% endif %}
+
+                    {# Indicador de desatualizado #}
+                    {% if days_old is not none %}
+                        {% if days_old >= 7 %}
+                            <span class="badge bg-danger bg-opacity-10 text-danger border border-danger rounded-pill"
+                                  title="Último scan há {{ days_old }} dias" style="font-size:.65rem;">
+                                <i class="fas fa-clock me-1" aria-hidden="true"></i>{{ days_old }}d atrás
+                            </span>
+                        {% elif days_old >= 3 %}
+                            <span class="badge bg-warning bg-opacity-10 text-warning border border-warning rounded-pill"
+                                  title="Último scan há {{ days_old }} dias" style="font-size:.65rem;">
+                                <i class="fas fa-clock me-1" aria-hidden="true"></i>{{ days_old }}d atrás
+                            </span>
                         {% endif %}
-                    </span>
-                {% endif %}
+                    {% endif %}
+                </div>
 
                 <div class="d-flex gap-2" role="group">
                     <button class="btn btn-link text-muted p-0 hover-primary"
@@ -61,40 +103,96 @@
                 </div>
             </header>
 
+            {# ── Título + URL/mensagem ── #}
             <h2 class="card-title fw-bold text-dark mb-1 h5">{{ project.name }}</h2>
 
             {% if project.scan_status in ['Rodando', 'Na fila'] %}
-                <p class="text-primary small mb-4 fw-bold text-truncate">{{ project.scan_message }}</p>
+                <p class="text-primary small mb-2 fw-bold text-truncate">{{ project.scan_message }}</p>
             {% else %}
-                <p class="text-muted font-monospace small mb-4">
+                <p class="text-muted font-monospace small mb-2">
                     <i class="fas fa-globe me-1 opacity-50" aria-hidden="true"></i>
                     {{ project.target_url }}
                 </p>
             {% endif %}
 
+            {# Data do último scan (sempre visível) #}
+            <p class="text-muted mb-3" style="font-size:.72rem;">
+                {% if project.last_scan_date %}
+                    <i class="far fa-clock me-1 opacity-50" aria-hidden="true"></i>
+                    Último scan: <time datetime="{{ project.last_scan_date.isoformat() }}">
+                        {{ project.last_scan_date.strftime('%d/%m/%Y %H:%M') }}
+                    </time>
+                {% else %}
+                    <i class="far fa-clock me-1 opacity-50" aria-hidden="true"></i>
+                    <span class="text-muted opacity-50">Nenhum scan realizado</span>
+                {% endif %}
+            </p>
+
+            {# ── Alerta de pendentes (urgência proporcional) ── #}
             {% if pendentes > 0 %}
-            <div class="alert alert-warning d-flex align-items-center p-2 small border-warning bg-warning bg-opacity-10 mb-3 rounded" role="alert">
-                <i class="fas fa-bell me-2 text-warning animate-swing" aria-hidden="true"></i>
-                <div class="fw-bold text-dark lh-1">
-                    {{ pendentes }} {{ 'novo subdomínio' if pendentes == 1 else 'novos subdomínios' }} (Alvos Válidos)!<br>
-                    <span class="fw-normal text-muted" style="font-size:0.8em;">{{ 'Precisa' if pendentes == 1 else 'Precisam' }} de scan</span>
+            <div class="alert d-flex align-items-center p-2 small mb-3 rounded
+                        {% if pendentes >= 50 %}alert-danger border-danger
+                        {% elif pendentes >= 10 %}alert-warning border-warning
+                        {% else %}alert-warning border-warning{% endif %}"
+                 role="alert">
+                <i class="fas fa-bell me-2
+                          {% if pendentes >= 50 %}text-danger{% else %}text-warning{% endif %}
+                          animate-swing" aria-hidden="true"></i>
+                <div class="lh-1">
+                    <span class="fw-bold
+                                 {% if pendentes >= 50 %}text-danger fs-6
+                                 {% elif pendentes >= 10 %}text-dark
+                                 {% else %}text-dark{% endif %}">
+                        {{ pendentes }}
+                    </span>
+                    <span class="fw-bold text-dark">
+                        {{ ' alvo' if pendentes == 1 else ' alvos' }} pendentes
+                    </span>
+                    <span class="fw-normal text-muted d-block" style="font-size:.8em;">
+                        {% if pendentes >= 50 %}Atenção: volume alto aguarda scan
+                        {% else %}{{ 'Aguarda' if pendentes == 1 else 'Aguardam' }} scan de vulnerabilidades
+                        {% endif %}
+                    </span>
                 </div>
             </div>
             {% endif %}
 
-            <footer class="d-flex justify-content-between align-items-center pt-3 border-top mt-auto">
-                <div class="d-flex align-items-center flex-wrap gap-2">
-                    <div class="small text-muted fw-bold" title="Total de subdomínios">
+            {# ── Barra de cobertura de scan ── #}
+            {% if alive > 0 %}
+            <div class="mb-3">
+                <div class="d-flex justify-content-between align-items-center mb-1">
+                    <span class="text-muted" style="font-size:.7rem; letter-spacing:.3px;">COBERTURA</span>
+                    <span class="text-muted fw-bold" style="font-size:.7rem;">
+                        {{ scanned }}/{{ alive }} hosts
+                        {% if pct_cov == 100 %}
+                            <i class="fas fa-check-circle text-success ms-1" aria-hidden="true"></i>
+                        {% endif %}
+                    </span>
+                </div>
+                <div class="progress rounded-pill" style="height:5px;"
+                     title="{{ pct_cov }}% dos hosts vivos verificados"
+                     role="progressbar" aria-valuenow="{{ pct_cov }}" aria-valuemin="0" aria-valuemax="100">
+                    <div class="progress-bar
+                                {% if pct_cov == 100 %}bg-success
+                                {% elif pct_cov >= 50 %}bg-primary
+                                {% else %}bg-warning{% endif %}"
+                         style="width:{{ pct_cov }}%;"></div>
+                </div>
+            </div>
+            {% endif %}
+
+            {# ── Footer: badges + botões ── #}
+            <footer class="pt-3 border-top mt-auto">
+
+                {# Badges de contagem #}
+                <div class="d-flex align-items-center flex-wrap gap-1 mb-3">
+                    <div class="small text-muted fw-bold me-1" title="Total de subdomínios">
                         <i class="fas fa-sitemap me-1" aria-hidden="true"></i>{{ total }}
                     </div>
 
-                    {% if count_2xx > 0 or count_3xx > 0 or count_4xx > 0 or count_5xx > 0 or total_vulns > 0 %}
-                        <div class="text-muted opacity-25" aria-hidden="true">|</div>
-                    {% endif %}
-
                     {% if total_vulns > 0 %}
                     <span class="badge bg-danger rounded-pill" title="Vulnerabilidades">
-                        <i class="fas fa-bug"></i> {{ total_vulns }}
+                        <i class="fas fa-bug me-1"></i>{{ total_vulns }}
                     </span>
                     {% endif %}
                     {% if count_2xx > 0 %}
@@ -111,10 +209,50 @@
                     {% endif %}
                 </div>
 
+                {# Botões de ação #}
+                {% if project.scan_status not in ['Rodando', 'Na fila'] %}
+                <div class="btn-group w-100 mb-2" role="group" aria-label="Modos de scan">
+                    <button class="btn btn-sm btn-outline-secondary fw-bold"
+                            title="Coleta subdomínios sem scan de vuln"
+                            hx-post="{{ url_for('main.start_scan_from_card', id=project.id, mode='baseline') }}"
+                            hx-target="#project-card-{{ project.id }}"
+                            hx-swap="outerHTML">
+                        <i class="fas fa-save" aria-hidden="true"></i>
+                        <span class="d-none d-xl-inline ms-1">Baseline</span>
+                    </button>
+                    <button class="btn btn-sm btn-outline-primary fw-bold"
+                            title="Recon: Subfinder + HTTPX + Naabu"
+                            hx-post="{{ url_for('main.start_scan_from_card', id=project.id, mode='recon') }}"
+                            hx-target="#project-card-{{ project.id }}"
+                            hx-swap="outerHTML">
+                        <i class="fas fa-satellite-dish" aria-hidden="true"></i>
+                        <span class="ms-1">Recon</span>
+                    </button>
+                    <button class="btn btn-sm btn-outline-danger fw-bold"
+                            title="Nuclei + Dalfox + SQLMap"
+                            hx-post="{{ url_for('main.start_scan_from_card', id=project.id, mode='vuln') }}"
+                            hx-target="#project-card-{{ project.id }}"
+                            hx-swap="outerHTML">
+                        <i class="fas fa-bug" aria-hidden="true"></i>
+                        <span class="ms-1">Vulns</span>
+                    </button>
+                    <button class="btn btn-sm btn-danger fw-bold"
+                            title="Recon + Vuln Scan completo"
+                            hx-post="{{ url_for('main.start_scan_from_card', id=project.id, mode='full') }}"
+                            hx-target="#project-card-{{ project.id }}"
+                            hx-swap="outerHTML">
+                        <i class="fas fa-radiation" aria-hidden="true"></i>
+                        <span class="ms-1">Full</span>
+                    </button>
+                </div>
+                {% endif %}
+
                 <a href="{{ url_for('main.project_details', id=project.id) }}"
-                   class="btn btn-sm btn-outline-primary fw-bold rounded-pill px-3 ms-2">
-                    Gerenciar
+                   class="btn btn-sm btn-outline-primary fw-bold w-100"
+                   aria-label="Gerenciar projeto {{ project.name }}">
+                    <i class="fas fa-cog me-1" aria-hidden="true"></i>Gerenciar
                 </a>
+
             </footer>
         </div>
     </article>

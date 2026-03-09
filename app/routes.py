@@ -94,7 +94,8 @@ def dashboard():
                            stats=stats,
                            severity=severity,
                            cards_stats=cards_stats,
-                           recent_activity=recent_activity)
+                           recent_activity=recent_activity,
+                           now=datetime.utcnow())
 
 
 @main.route('/add_project', methods=['POST'])
@@ -175,6 +176,31 @@ def project_details(id):
                            project=project,
                            stats=stats,
                            domains=sorted_domains)
+
+
+@main.route('/project/<int:id>/scan_card/<mode>', methods=['POST'])
+@login_required
+def start_scan_from_card(id, mode):
+    """Inicia scan e retorna o card atualizado (usado nos botões rápidos do dashboard)."""
+    project = Project.query.get_or_404(id)
+    if project.user_id != current_user.id:
+        abort(403)
+
+    if mode not in ['recon', 'vuln', 'full', 'baseline']:
+        return "Modo inválido", 400
+
+    task_id = celery_uuid()
+    project.scan_status = 'Na fila'
+    project.scan_message = f'Aguardando worker ({mode})...'
+    project.current_task_id = task_id
+    db.session.commit()
+
+    run_scan_task.apply_async(args=[project.id, mode], task_id=task_id)
+
+    card_stats = get_all_projects_card_stats([id]).get(id, {})
+    return render_template('partials/dashboard_card.html',
+                           project=project, card_stats=card_stats,
+                           now=datetime.utcnow())
 
 
 @main.route('/project/<int:id>/scan/<mode>', methods=['POST'])
@@ -531,7 +557,7 @@ def start_global_scan():
     # Marca todos como pendentes (sem despachar ainda)
     for p in projects:
         p.scan_status = 'Na fila'
-        p.scan_message = 'Aguardando Worker disponível...'
+        p.scan_message = '⏳ Aguardando slot disponível...'
         p.current_task_id = None
 
     db.session.commit()
@@ -541,7 +567,7 @@ def start_global_scan():
     for p in projects[:GLOBAL_SCAN_CONCURRENCY]:
         task_id = celery_uuid()
         p.current_task_id = task_id
-        p.scan_message = 'Aguardando worker disponível...'
+        p.scan_message = 'Aguardando worker...'
         db.session.flush()
         run_scan_task.apply_async(args=[p.id, 'full'], task_id=task_id)
         dispatched += 1
@@ -666,7 +692,8 @@ def project_card_part(id):
     # Calcula stats via SQL (não carrega todos os domínios)
     card_stats = get_all_projects_card_stats([id]).get(id, {})
     return render_template('partials/dashboard_card.html',
-                           project=project, card_stats=card_stats)
+                           project=project, card_stats=card_stats,
+                           now=datetime.utcnow())
 
 
 @main.route('/project/<int:id>/count_domains')

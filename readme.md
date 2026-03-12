@@ -69,12 +69,15 @@ graph TD
 ### Controle de Scans
 
 - **Fila Global com Concorrência Limitada:** Ao clicar em "Iniciar Scan Global", no máximo **2 projetos rodam ao mesmo tempo**. Os demais aguardam em fila e são despachados automaticamente conforme os slots abrem.
-- **`dispatch_next_pending()`:** Ao finalizar (sucesso, erro ou parada manual), o próximo projeto pendente é despachado automaticamente.
+- **`dispatch_next_pending()`:** Ao finalizar (sucesso, erro ou parada manual), o próximo projeto pendente é despachado automaticamente. Protegido por **mutex Redis** (`SET NX EX`) para evitar que dois workers despachem simultaneamente e ultrapassem o limite de concorrência.
 - **Stop Individual e Global:** Para um projeto ou todos de uma vez, limpando a fila do Redis.
 
 ### Interface & Gestão
 
-- **Dashboard Interativo:** Estatísticas em tempo real (polling a 10s). Cards com contagens calculadas via SQL — sem carregar domínios na memória.
+- **Dashboard Interativo:** Aba "Visão Geral" com 5 cards: Superfície de Ataque (distribuição HTTP), Vulnerabilidades (barras de severidade), Projetos em Risco (ranking), Atividade Recente (tabela com status), Cobertura por Projeto (barra de progresso). Polling adaptativo: 4s quando rodando, 120s quando parado.
+- **Cards de Projeto:** Barra de cobertura de scan (hosts verificados/vivos), data do último scan com alerta de desatualização (3d amarelo, 7d vermelho), 4 botões de scan rápido (Baseline, Recon, Vulns, Full) diretamente no card, urgência proporcional no alerta de pendentes, distinção visual de estado por borda colorida.
+- **Lista de Subdomínios:** Filtros rápidos pill (Todos, 2xx, 3xx, 4xx, Sem Status), ordenação clicável por coluna (nome, status, data), colunas Status e Portas separadas, badge de vulnerabilidades por domínio, badge Verificado/Pendente por linha, contador de resultados.
+- **Vulnerabilidades:** Cards por vulnerabilidade com parsing inteligente da saída das ferramentas — Nuclei exibe Matcher e URL clicável, SQLMap exibe parâmetro e payload, Dalfox exibe o payload XSS. Summary bar com contagem por severidade no topo.
 - **Exportação:** Download dos dados de cada projeto em **JSON** ou **CSV** diretamente pelo browser.
 - **Histórico de Scans:** Aba por projeto com métricas de cada execução: modo, status, duração, novos domínios, hosts vivos e novas vulnerabilidades.
 - **Busca Avançada com Paginação:** Filtros no estilo Discord + navegação entre páginas (cap de 500 por request).
@@ -87,6 +90,8 @@ graph TD
 - **Rate Limiting no Login:** Máximo de 5 tentativas por minuto por IP (Flask-Limiter + Redis).
 - **CSRF Protection:** Flask-WTF instalado e configurado.
 - **Race Condition Corrigida:** `celery_uuid()` pré-gerado e salvo no banco **antes** do `apply_async`, garantindo que o worker sempre encontre o `task_id` correto.
+- **Mutex Redis no Dispatcher:** `dispatch_next_pending()` usa `SET NX EX` do Redis para serializar o despacho entre workers paralelos — impede que dois `ForkPoolWorker` despachem simultaneamente e ultrapassem o limite de concorrência. TTL de 15s evita deadlock permanente.
+- **FFuf com Timeout por Host:** Flags `-timeout`, `-maxtime` e `-maxtime-job` limitam o FFuf a no máximo `FFUF_MAXTIME` segundos por host (padrão: 90s), evitando travamentos em servidores lentos.
 - **Worker Init Signal:** O Flask app é inicializado **uma única vez** por processo worker via `@worker_init.connect`, não a cada task.
 - **Task Auto-Healing:** Detecta automaticamente scans "zumbis" e corrige o status sem intervenção humana.
 - **Reset no Startup:** Projetos com status `Rodando` ou `Na fila` de um boot anterior são resetados para `Parado` automaticamente.
@@ -160,6 +165,7 @@ cp .env.example .env
 | `NAABU_CHUNK_SIZE` | — | Hosts por lote no Naabu (padrão: 500) | `500` |
 | `NAABU_CHUNK_TIMEOUT` | — | Timeout por lote em segundos (padrão: 600) | `600` |
 | `NAABU_RATE` | — | Pacotes/s do Naabu (padrão: 1000) | `1000` |
+| `FFUF_MAXTIME` | — | Tempo máximo por host no FFuf em segundos (padrão: 90) | `90` |
 
 > Se `SECRET_KEY` ou `ADMIN_PASSWORD` não estiverem definidas, a aplicação **recusa iniciar**.
 
@@ -232,6 +238,7 @@ git add migrations/ && git commit -m "chore: migration ..."
 | `POST` | `/project/<id>/mark_scanned` | Marca todos os domínios como verificados |
 | `GET` | `/api/csrf-token` | Retorna token CSRF para requisições AJAX |
 | `POST` | `/project/<id>/scan/<mode>` | Inicia scan (`baseline`, `recon`, `vuln`, `full`) |
+| `POST` | `/project/<id>/scan_card/<mode>` | Inicia scan pelo card do dashboard e retorna o card atualizado |
 | `POST` | `/scan/global/start` | Inicia scan em todos os projetos (máx 2 simultâneos) |
 | `POST` | `/scan/global/stop` | Para todos os scans e limpa a fila |
 

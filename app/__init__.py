@@ -56,12 +56,12 @@ def create_app():
     # --- Validações de segurança no startup ---
     secret_key = os.environ.get('SECRET_KEY')
     if not secret_key:
-        raise RuntimeError("❌ [CONFIG] SECRET_KEY não definida!")
+        raise RuntimeError("[CONFIG] SECRET_KEY não definida!")
 
     admin_pass = os.environ.get('ADMIN_PASSWORD')
     if not admin_pass:
         raise RuntimeError(
-            "❌ [CONFIG] ADMIN_PASSWORD não definida! "
+            "[CONFIG] ADMIN_PASSWORD não definida! "
             "Configure no .env antes de iniciar."
         )
 
@@ -134,7 +134,7 @@ def register_commands(app):
         wait_for_db()
         reset_orphaned_projects()
         init_admin_user()
-        print("✅ Banco pronto, projetos verificados e admin confirmado.")
+        print("Banco pronto, projetos verificados e admin confirmado.")
 
     @app.cli.command("create-admin")
     def create_admin_cmd():
@@ -152,23 +152,23 @@ def wait_for_db():
     max_retries = 30
     sleep_seconds = 2
 
-    print("⏳ [SISTEMA] Aguardando Banco de Dados iniciar...")
+    print("[SISTEMA] Aguardando Banco de Dados iniciar...")
 
     for i in range(max_retries):
         try:
             db.session.execute(text('SELECT 1'))
             db.session.commit()
-            print("✅ [SISTEMA] Banco de Dados conectado!")
+            print("[SISTEMA] Banco de Dados conectado!")
             return
 
         except OperationalError:
-            print(f"⚠️  [SISTEMA] Banco indisponível... ({i + 1}/{max_retries})")
+            print(f"[SISTEMA] Banco indisponível... ({i + 1}/{max_retries})")
             time.sleep(sleep_seconds)
         except Exception as e:
-            print(f"⚠️  [SISTEMA] Erro inesperado: {e}")
+            print(f"[SISTEMA] Erro inesperado: {e}")
             time.sleep(sleep_seconds)
 
-    print("❌ [SISTEMA] Falha Crítica: banco não respondeu.")
+    print("[SISTEMA] Falha Crítica: banco não respondeu.")
     raise Exception("Database connection failed after multiple retries")
 
 
@@ -181,14 +181,14 @@ def _apply_migrations():
     try:
         from flask_migrate import upgrade as db_upgrade
         db_upgrade()
-        print("✅ [MIGRATE] Schema atualizado via Flask-Migrate.")
+        print("[MIGRATE] Schema atualizado via Flask-Migrate.")
     except Exception as e:
-        print(f"⚠️  [MIGRATE] Flask-Migrate falhou ({e}), usando db.create_all() como fallback.")
+        print(f"[MIGRATE] Flask-Migrate falhou ({e}), usando db.create_all() como fallback.")
         try:
             db.create_all()
-            print("✅ [MIGRATE] Tabelas criadas via db.create_all().")
+            print("[MIGRATE] Tabelas criadas via db.create_all().")
         except Exception as e2:
-            print(f"❌ [MIGRATE] Falha também no create_all: {e2}")
+            print(f"[MIGRATE] Falha também no create_all: {e2}")
             raise
 
 
@@ -212,11 +212,11 @@ def reset_orphaned_projects():
 
     for p in orphans:
         p.scan_status = 'Parado'
-        p.scan_message = '⚠️ Interrompido por reinício do servidor.'
+        p.scan_message = 'Interrompido por reinício do servidor.'
         p.current_task_id = None
 
     db.session.commit()
-    print(f"⚙️  [STARTUP] {count} projeto(s) órfão(s) resetados para 'Parado'.")
+    print(f"[STARTUP] {count} projeto(s) órfão(s) resetados para 'Parado'.")
 
 def init_admin_user(force=False):
     """
@@ -229,30 +229,30 @@ def init_admin_user(force=False):
     admin_pass = os.environ.get('ADMIN_PASSWORD')
 
     if not admin_pass:
-        print("⚠️  [SETUP] ADMIN_PASSWORD não definida — pulando criação do admin.")
+        print("[SETUP] ADMIN_PASSWORD não definida — pulando criação do admin.")
         return
 
     try:
         existing = User.query.filter_by(username=admin_user).first()
 
         if not existing:
-            print(f"⚙️  [SETUP] Criando usuário '{admin_user}'...")
+            print(f"[SETUP] Criando usuário '{admin_user}'...")
             new_user = User(
                 username=admin_user,
                 password=generate_password_hash(admin_pass, method='pbkdf2:sha256')
             )
             db.session.add(new_user)
             db.session.commit()
-            print("✅ [SETUP] Admin criado com sucesso!")
+            print("[SETUP] Admin criado com sucesso!")
 
         elif force:
-            print(f"⚙️  [SETUP] Atualizando senha do usuário '{admin_user}'...")
+            print(f"[SETUP] Atualizando senha do usuário '{admin_user}'...")
             existing.password = generate_password_hash(admin_pass, method='pbkdf2:sha256')
             db.session.commit()
-            print("✅ [SETUP] Senha atualizada.")
+            print("[SETUP] Senha atualizada.")
 
     except Exception as e:
-        print(f"⚠️  [SETUP] Aviso ao verificar Admin: {e}")
+        print(f"[SETUP] Aviso ao verificar Admin: {e}")
 
 # ---------------------------------------------------------------------------
 # Inicialização do worker Celery (executado UMA VEZ por processo worker)

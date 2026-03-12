@@ -178,6 +178,45 @@ def project_details(id):
                            domains=sorted_domains)
 
 
+GLOBAL_SCAN_CONCURRENCY = int(os.environ.get('GLOBAL_SCAN_CONCURRENCY', 2))
+
+
+def _count_active_scans():
+    """Conta projetos ativos: Rodando + Na fila com task já despachada."""
+    return Project.query.filter(
+        db.or_(
+            Project.scan_status == 'Rodando',
+            db.and_(
+                Project.scan_status == 'Na fila',
+                Project.current_task_id.isnot(None)
+            )
+        )
+    ).count()
+
+
+def _dispatch_or_queue(project, mode):
+    """
+    Despacha a task imediatamente se houver slot disponível,
+    ou apenas enfileira (current_task_id=None) para dispatch_next_pending.
+    """
+    ativos = _count_active_scans()
+    task_id = celery_uuid()
+
+    if ativos < GLOBAL_SCAN_CONCURRENCY:
+        project.scan_status = 'Na fila'
+        project.scan_message = f'Aguardando worker ({mode})...'
+        project.current_task_id = task_id
+        db.session.commit()
+        run_scan_task.apply_async(args=[project.id, mode], task_id=task_id)
+        print(f"[DISPATCH] {project.name} despachado imediatamente ({ativos+1}/{GLOBAL_SCAN_CONCURRENCY} ativos)")
+    else:
+        project.scan_status = 'Na fila'
+        project.scan_message = f'Aguardando worker ({ativos}/{GLOBAL_SCAN_CONCURRENCY} em uso)...'
+        project.current_task_id = None   # sem task_id = aguarda dispatch_next_pending
+        db.session.commit()
+        print(f"[DISPATCH] {project.name} enfileirado — slots cheios ({ativos}/{GLOBAL_SCAN_CONCURRENCY})")
+
+
 @main.route('/project/<int:id>/scan_card/<mode>', methods=['POST'])
 @login_required
 def start_scan_from_card(id, mode):
@@ -189,13 +228,13 @@ def start_scan_from_card(id, mode):
     if mode not in ['recon', 'vuln', 'full', 'baseline']:
         return "Modo inválido", 400
 
-    task_id = celery_uuid()
-    project.scan_status = 'Na fila'
-    project.scan_message = f'Aguardando worker ({mode})...'
-    project.current_task_id = task_id
-    db.session.commit()
+    if project.scan_status in ['Rodando', 'Na fila']:
+        card_stats = get_all_projects_card_stats([id]).get(id, {})
+        return render_template('partials/dashboard_card.html',
+                               project=project, card_stats=card_stats,
+                               now=datetime.utcnow())
 
-    run_scan_task.apply_async(args=[project.id, mode], task_id=task_id)
+    _dispatch_or_queue(project, mode)
 
     card_stats = get_all_projects_card_stats([id]).get(id, {})
     return render_template('partials/dashboard_card.html',
@@ -213,14 +252,15 @@ def start_scan(id, mode):
     if mode not in ['recon', 'vuln', 'full', 'baseline']:
         return "Modo inválido", 400
 
-    # Pré-gera task ID antes do dispatch para evitar race condition
-    task_id = celery_uuid()
-    project.scan_status = 'Na fila'
-    project.scan_message = 'Aguardando worker disponível...'
-    project.current_task_id = task_id
-    db.session.commit()
+    if project.scan_status in ['Rodando', 'Na fila']:
+        pendentes = Domain.query.filter(
+            Domain.project_id == id,
+            Domain.scanned_vulns == False,
+            Domain.status_code.in_([200, 201, 202, 204, 301, 302, 307, 308])
+        ).count()
+        return render_template('partials/controls.html', project=project, pendentes=pendentes)
 
-    run_scan_task.apply_async(args=[project.id, mode], task_id=task_id)
+    _dispatch_or_queue(project, mode)
 
     pendentes = Domain.query.filter(
         Domain.project_id == project.id,
@@ -252,7 +292,7 @@ def stop_scan(id):
             history.finished_at = datetime.utcnow()
 
         project.scan_status = 'Parado'
-        project.scan_message = '🛑 Scan interrompido pelo usuário.'
+        project.scan_message = 'Scan interrompido pelo usuário.'
         project.current_task_id = None
         db.session.commit()
 
@@ -499,7 +539,7 @@ def heal_projects_api():
                     h.finished_at = datetime.utcnow()
 
                 p.scan_status = 'Erro'
-                p.scan_message = '🛑 Processo perdido'
+                p.scan_message = 'Processo perdido'
                 p.current_task_id = None
                 changes += 1
 
@@ -532,8 +572,6 @@ def dashboard_redirect():
 
 
 # Quantos projetos podem rodar em paralelo no scan global
-GLOBAL_SCAN_CONCURRENCY = 2
-
 @main.route('/scan/global/start', methods=['POST'])
 @login_required
 def start_global_scan():
@@ -554,20 +592,33 @@ def start_global_scan():
         flash('Nenhum projeto elegível para scan.', 'info')
         return redirect(url_for('main.dashboard'))
 
-    # Marca todos como pendentes (sem despachar ainda)
+    # Marca todos como pendentes SEM task_id (fila passiva)
     for p in projects:
         p.scan_status = 'Na fila'
-        p.scan_message = '⏳ Aguardando slot disponível...'
+        p.scan_message = 'mode:full'   # preserva o modo para dispatch_next_pending
         p.current_task_id = None
 
     db.session.commit()
 
-    # Despacha apenas os primeiros N imediatamente
+    # Conta slots realmente disponíveis (desconta Rodando + Na fila já despachados)
+    ativos = Project.query.filter(
+        db.or_(
+            Project.scan_status == 'Rodando',
+            db.and_(
+                Project.scan_status == 'Na fila',
+                Project.current_task_id != None
+            )
+        )
+    ).count()
+
+    slots = max(0, GLOBAL_SCAN_CONCURRENCY - ativos)
+
+    # Despacha apenas os slots disponíveis
     dispatched = 0
-    for p in projects[:GLOBAL_SCAN_CONCURRENCY]:
+    for p in projects[:slots]:
         task_id = celery_uuid()
         p.current_task_id = task_id
-        p.scan_message = 'Aguardando worker...'
+        p.scan_message = 'Aguardando worker (full)...'
         db.session.flush()
         run_scan_task.apply_async(args=[p.id, 'full'], task_id=task_id)
         dispatched += 1
@@ -578,7 +629,7 @@ def start_global_scan():
     waiting = total - dispatched
     msg = f'{dispatched} scan(s) iniciado(s)'
     if waiting > 0:
-        msg += f', {waiting} aguardando slot.'
+        msg += f', {waiting} aguardando worker.'
     flash(msg, 'success')
     return redirect(url_for('main.dashboard'))
 
@@ -611,7 +662,7 @@ def stop_global_scan():
             h.finished_at = datetime.utcnow()
 
         p.scan_status = 'Parado'
-        p.scan_message = '🛑 Parada Manual (Global)'
+        p.scan_message = 'Parada Manual (Global)'
         p.current_task_id = None
         stopped += 1
 
@@ -785,8 +836,10 @@ def project_domains_part(id):
 
     search_query = request.args.get('q', '')
     status_filter = request.args.get('status')
-    page = request.args.get('page', 1, type=int)
-    per_page = min(request.args.get('per_page', 200, type=int), 500)  # cap em 500
+    page     = request.args.get('page', 1, type=int)
+    per_page = min(request.args.get('per_page', 200, type=int), 500)
+    sort_by  = request.args.get('sort', 'first_seen')   # first_seen | status | ports | name
+    sort_dir = request.args.get('dir', 'desc')           # asc | desc
 
     query = Domain.query.filter_by(project_id=project.id)
 
@@ -863,16 +916,32 @@ def project_domains_part(id):
         elif status_filter.isdigit():
             query = query.filter_by(status_code=int(status_filter))
 
-    pagination = query.order_by(Domain.first_seen.desc()).paginate(
-        page=page, per_page=per_page, error_out=False
-    )
+    # Ordenação dinâmica
+    _sort_col = {
+        'status':     Domain.status_code,
+        'ports':      Domain.open_ports,
+        'name':       Domain.name,
+        'first_seen': Domain.first_seen,
+    }.get(sort_by, Domain.first_seen)
+
+    if sort_dir == 'asc':
+        query = query.order_by(_sort_col.asc().nullslast())
+    else:
+        query = query.order_by(_sort_col.desc().nullslast())
+
+    total_filtered = query.count()
+
+    pagination = query.paginate(page=page, per_page=per_page, error_out=False)
     domains = pagination.items
 
     return render_template('partials/domains_list.html',
                            project=project,
                            domains=domains,
                            pagination=pagination,
-                           current_status=status_filter)
+                           current_status=status_filter,
+                           total_filtered=total_filtered,
+                           sort_by=sort_by,
+                           sort_dir=sort_dir)
 
 
 

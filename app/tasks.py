@@ -539,41 +539,87 @@ def run_scan_task(self, project_id, mode='full'):
 
 def dispatch_next_pending():
     """
-    Chamado ao final de cada scan para verificar se há projetos
-    com status 'Na fila' mas sem task_id (aguardando slot).
-    Despacha o próximo da fila se houver slot disponível.
+    Chamado ao final de cada scan quando um slot abre.
+    Usa um mutex Redis para garantir que apenas UM worker por vez
+    execute o despacho — elimina a race condition entre ForkPoolWorker-1
+    e ForkPoolWorker-2 que terminam simultaneamente.
     """
     from celery import uuid as celery_uuid
+    import redis as redis_lib
 
-    # Conta quantos projetos estão ATIVAMENTE rodando agora
-    ativos = Project.query.filter(
-        Project.scan_status == 'Rodando'
-    ).count()
+    MAX_CONCURRENT = int(os.environ.get('GLOBAL_SCAN_CONCURRENCY', 2))
+    LOCK_KEY   = 'dispatch_lock'
+    LOCK_TTL   = 15  # segundos — evita deadlock se o processo morrer
 
-    MAX_CONCURRENT = 2
+    # ── Tenta adquirir o mutex Redis ────────────────────────────────────────
+    try:
+        r = redis_lib.Redis(
+            host=os.environ.get('REDIS_HOST', 'redis'),
+            port=int(os.environ.get('REDIS_PORT', 6379)),
+            db=1  # mesmo db do cache Python
+        )
+        # SET NX EX: só seta se a chave não existir (atômico no Redis)
+        acquired = r.set(LOCK_KEY, '1', nx=True, ex=LOCK_TTL)
+    except Exception as e:
+        print(f"[QUEUE] Redis indisponível para mutex: {e} — usando fallback sem lock.")
+        acquired = True
+        r = None
 
-    if ativos >= MAX_CONCURRENT:
-        print(f"[QUEUE] {ativos} projetos ativos, limite atingido. Aguardando.")
+    if not acquired:
+        print("[QUEUE] Outro worker já está despachando. Ignorando.")
         return
 
-    # Pega o próximo projeto em fila SEM task_id (slot pendente)
-    proximo = Project.query.filter(
-        Project.scan_status == 'Na fila',
-        Project.current_task_id == None
-    ).order_by(Project.id.asc()).first()
+    try:
+        # ── Seção crítica — somente um worker por vez ───────────────────────
+        # Conta Rodando + Na fila COM task_id (já despachados mas não iniciados)
+        ativos = Project.query.filter(
+            db.or_(
+                Project.scan_status == 'Rodando',
+                db.and_(
+                    Project.scan_status == 'Na fila',
+                    Project.current_task_id.isnot(None)
+                )
+            )
+        ).count()
 
-    if not proximo:
-        print("[QUEUE] Fila global vazia — nenhum projeto pendente.")
-        return
+        slots_livres = MAX_CONCURRENT - ativos
 
-    task_id = celery_uuid()
-    proximo.current_task_id = task_id
-    proximo.scan_message = 'Aguardando worker...'
-    db.session.flush()
-    run_scan_task.apply_async(args=[proximo.id, 'full'], task_id=task_id)
-    db.session.commit()
-    print(f"[QUEUE] Próximo projeto despachado: {proximo.name} → task {task_id}")
+        if slots_livres <= 0:
+            print(f"[QUEUE] {ativos}/{MAX_CONCURRENT} slots ocupados. Aguardando.")
+            return
 
+        # Pega os próximos na fila passiva (sem task_id)
+        pendentes = Project.query.filter(
+            Project.scan_status == 'Na fila',
+            Project.current_task_id == None
+        ).order_by(Project.id.asc()).limit(slots_livres).all()
+
+        if not pendentes:
+            print("[QUEUE] Fila global vazia — nenhum projeto pendente.")
+            return
+
+        for proximo in pendentes:
+            # Recupera o modo salvo no scan_message (ex: "mode:recon")
+            mode = 'full'
+            if proximo.scan_message and proximo.scan_message.startswith('mode:'):
+                mode = proximo.scan_message.split(':', 1)[1].strip()
+
+            task_id = celery_uuid()
+            proximo.current_task_id = task_id
+            proximo.scan_message = f'Aguardando worker ({mode})...'
+            db.session.flush()
+            run_scan_task.apply_async(args=[proximo.id, mode], task_id=task_id)
+            print(f"[QUEUE] Despachado: {proximo.name} (mode={mode}) → task {task_id}")
+
+        db.session.commit()
+
+    finally:
+        # ── Libera o mutex sempre, mesmo em caso de exceção ─────────────────
+        if r:
+            try:
+                r.delete(LOCK_KEY)
+            except Exception:
+                pass
 
 # ---------------------------------------------------------------------------
 # process_vulns
@@ -645,7 +691,7 @@ def run_daily_scan(mode='full'):
             db.session.commit()
 
         if state.last_daily_scan == today:
-            print("🛑 [SCHEDULER] Scan diário já executado hoje.")
+            print("[SCHEDULER] Scan diário já executado hoje.")
             return
 
         state.last_daily_scan = today

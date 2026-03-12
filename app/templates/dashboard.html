@@ -328,7 +328,7 @@
                             Scans Ativos
                         </p>
                         <ul class="list-unstyled mb-0">
-                        {% for p in active_projects[:3] %}
+                        {% for p in active_projects[:5] %}
                             <li class="d-flex align-items-center mb-2">
                                 <span class="badge {% if p.scan_status == 'Rodando' %}bg-primary{% else %}bg-secondary{% endif %} me-2"
                                       style="font-size:.65rem;">{{ p.scan_status }}</span>

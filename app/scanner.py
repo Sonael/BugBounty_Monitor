@@ -108,10 +108,10 @@ def find_subdomains(target_domain):
 
     try:
         print("[SCANNER] 1/2 Rodando Subfinder...")
-        run_command(f"subfinder -d {target_domain} -silent -t 100 -all -o {file_subfinder}", timeout=1800)
+        run_command(f"subfinder -d {target_domain} -silent -t {SUBFINDER_THREADS} -all -o {file_subfinder}", timeout=1800)
 
         print("[SCANNER] 2/2 Rodando Amass (Passive)...")
-        run_command(f"amass enum -passive -d {target_domain} -noalts -timeout 29 -o {file_amass}", timeout=1800)
+        run_command(f"amass enum -passive -d {target_domain} -noalts -timeout {AMASS_TIMEOUT} -o {file_amass}", timeout=1800)
 
         for filename in [file_subfinder, file_amass]:
             if not os.path.exists(filename):
@@ -155,7 +155,7 @@ def check_alive(subdomains_list):
             f.write("\n".join(subdomains_list))
 
         print(f"[SCANNER] HTTPX em {len(subdomains_list)} alvos...")
-        cmd     = f"/usr/local/bin/pd-httpx -l {filename} -json -silent -sc -td -probe -ip -threads 50"
+        cmd     = f"/usr/local/bin/pd-httpx -l {filename} -json -silent -sc -td -probe -ip -threads {HTTPX_THREADS}"
         results = run_command(cmd, timeout=1800)
         print(f"[SCANNER] HTTPX: {len(results)} respostas.")
 
@@ -192,8 +192,11 @@ def scan_nuclei_bulk(targets_file):
 
     cmd = (
         f"nuclei -l {targets_file} "
-        f"-tags cve2023,cve2024,cve2025,cve2026,misconfig,exposure,tech,panel "
-        f"-s low,medium,high,critical -j -silent -timeout 2 -c 80 -o {output}"
+        f"-tags cve,misconfig,exposure,tech,panel,xss,sqli,lfi,ssrf,rce,oast,takeover,default-login,token-spray,fuzzing "
+        f"-s low,medium,high,critical "
+        f"-j -silent -timeout 10 -c 50 "
+        f"-retries 2 "
+        f"-o {output}"
     )
     run_command(cmd, timeout=7200)
 
@@ -223,7 +226,12 @@ def scan_nuclei_bulk(targets_file):
                             continue
 
                         # Monta descrição com todos os campos disponíveis
+                        # O nome legível é sempre a primeira parte — garante que
+                        # fique visível mesmo quando outros campos estão ausentes
                         parts = []
+
+                        # Nome legível do template (ex: "SSL DNS Names")
+                        parts.append(f"Nome: {name}")
 
                         if matcher:
                             parts.append(f"Matcher: {matcher}")
@@ -239,7 +247,7 @@ def scan_nuclei_bulk(targets_file):
 
                         # Descrição do template (ex: "SSL certificate uses weak cipher")
                         template_desc = info.get('description', '')
-                        if template_desc and len(parts) < 4:
+                        if template_desc and len(parts) < 5:
                             parts.append(f"Detalhe: {template_desc[:200]}")
 
                         description = ' | '.join(parts)
@@ -279,11 +287,11 @@ def scan_crawling_xss_bulk(targets_file):
 
     try:
         print("[SCANNER] 1/3 Katana...")
-        run_command(f"katana -list {targets_file} -d 2 -jc -silent -o {temp_urls}", timeout=3600)
+        run_command(f"katana -list {targets_file} -d {KATANA_DEPTH} -jc -kf all -silent -o {temp_urls}", timeout=3600)
 
         print("[SCANNER] 2/3 GAU...")
         run_command(
-            f"cat {targets_file} | gau --blacklist png,jpg,jpeg,gif,css,svg,woff,woff2 >> {temp_urls}",
+            f"cat {targets_file} | gau --blacklist {GAU_BLACKLIST} >> {temp_urls}",
             timeout=1800,
         )
 
@@ -295,7 +303,7 @@ def scan_crawling_xss_bulk(targets_file):
             count = sum(1 for _ in f)
         print(f"[SCANNER] 3/3 Dalfox em {count} URLs...")
         run_command(
-            f"dalfox file {temp_urls} --format json --silence --skip-bav -o {output_xss}",
+            f"dalfox file {temp_urls} --format json --silence --follow-redirects --timeout {DALFOX_TIMEOUT} -o {output_xss}",
             timeout=3600,
         )
 
@@ -350,7 +358,7 @@ def scan_sqlmap_bulk(targets_file):
     try:
         print("[SCANNER] 1/2 Katana (qurl)...")
         run_command(
-            f"katana -list {targets_file} -d 2 -silent -f qurl -o {params_file}",
+            f"katana -list {targets_file} -d {KATANA_DEPTH} -kf all -silent -f qurl -o {params_file}",
             timeout=3600,
         )
 
@@ -360,7 +368,7 @@ def scan_sqlmap_bulk(targets_file):
 
         print("[SCANNER] 2/2 SQLMap...")
         run_command(
-            f"sqlmap -m {params_file} --batch --random-agent --risk=1 --level=1 "
+            f"sqlmap -m {params_file} --batch --random-agent --risk={SQLMAP_RISK} --level={SQLMAP_LEVEL} --threads={SQLMAP_THREADS} "
             f"--smart --results-file={results_csv}",
             timeout=7200,
         )
@@ -460,7 +468,7 @@ def scan_naabu_bulk(targets_file, chunk_size=None, chunk_timeout=None, rate=None
 
             cmd = (
                 f"naabu -list {chunk_file} "
-                f"-top-ports 100 -rate {rate} -retries 1 -timeout 5 "
+                f"-top-ports {NAABU_TOP_PORTS} -rate {rate} -retries {NAABU_RETRIES} -timeout {NAABU_PKT_TIMEOUT} "
                 f"-json -silent"
             )
             results = run_command(cmd, timeout=chunk_timeout)
@@ -565,7 +573,7 @@ def scan_gau(target_domain):
     print(f"[SCANNER] GAU em {target_domain}...")
     output = f"gau_{uuid.uuid4().hex}.txt"
     run_command(
-        f"gau {target_domain} --blacklist png,jpg,jpeg,gif,css,svg,woff,woff2 --o {output}",
+        f"gau {target_domain} --blacklist {GAU_BLACKLIST} --o {output}",
         timeout=1800,
     )
     urls = []
@@ -619,6 +627,54 @@ def scan_cmseek(target_url):
 
 # Tempo máximo por scan FFuf — configurável via .env
 FFUF_MAXTIME = int(os.environ.get('FFUF_MAXTIME', 90))   # segundos por host
+
+# ---------------------------------------------------------------------------
+# Configurações das ferramentas — todas via .env
+# ---------------------------------------------------------------------------
+
+# Subfinder
+SUBFINDER_THREADS  = int(os.environ.get('SUBFINDER_THREADS', 100))
+
+# Amass
+AMASS_TIMEOUT      = int(os.environ.get('AMASS_TIMEOUT', 29))
+
+# HTTPX
+HTTPX_THREADS      = int(os.environ.get('HTTPX_THREADS', 50))
+
+# Naabu (chunk já vem do env via NAABU_CHUNK_SIZE/TIMEOUT/RATE)
+NAABU_TOP_PORTS    = int(os.environ.get('NAABU_TOP_PORTS', 100))
+NAABU_RETRIES      = int(os.environ.get('NAABU_RETRIES', 1))
+NAABU_PKT_TIMEOUT  = int(os.environ.get('NAABU_PKT_TIMEOUT', 5))
+
+# Nuclei
+NUCLEI_TAGS        = os.environ.get(
+    'NUCLEI_TAGS',
+    'cve,misconfig,exposure,tech,panel,xss,sqli,lfi,ssrf,rce,oast,takeover,default-login,fuzzing'
+)
+NUCLEI_SEVERITY    = os.environ.get('NUCLEI_SEVERITY', 'low,medium,high,critical')
+NUCLEI_CONCURRENCY = int(os.environ.get('NUCLEI_CONCURRENCY', 50))
+NUCLEI_TIMEOUT     = int(os.environ.get('NUCLEI_TIMEOUT', 10))
+NUCLEI_RETRIES     = int(os.environ.get('NUCLEI_RETRIES', 2))
+
+# Katana
+KATANA_DEPTH       = int(os.environ.get('KATANA_DEPTH', 3))
+
+# Dalfox
+DALFOX_TIMEOUT     = int(os.environ.get('DALFOX_TIMEOUT', 10))
+
+# SQLMap
+SQLMAP_RISK        = int(os.environ.get('SQLMAP_RISK', 2))
+SQLMAP_LEVEL       = int(os.environ.get('SQLMAP_LEVEL', 3))
+SQLMAP_THREADS     = int(os.environ.get('SQLMAP_THREADS', 4))
+
+# FFuf (FFUF_MAXTIME já definido abaixo — mantém compatibilidade)
+
+# GAU
+GAU_BLACKLIST      = os.environ.get(
+    'GAU_BLACKLIST',
+    'png,jpg,jpeg,gif,css,svg,woff,woff2,ico,ttf,eot'
+)
+
 
 
 def scan_ffuf(target_url):

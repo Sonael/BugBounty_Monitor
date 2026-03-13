@@ -206,12 +206,50 @@ def scan_nuclei_bulk(targets_file):
                         continue
                     try:
                         data = json.loads(line)
+
+                        info        = data.get('info', {})
+                        template_id = data.get('template-id', '')
+                        matcher     = data.get('matcher-name', '')
+                        matched_at  = data.get('matched-at', '')
+                        extracted   = data.get('extracted-results', [])
+
+                        # Nome: prefere info.name, cai no template-id como fallback
+                        name = info.get('name') or template_id or 'Nuclei Finding'
+
+                        # Descarta findings sem URL e sem dados extraídos —
+                        # não têm informação suficiente para ser acionáveis
+                        if not matched_at and not extracted:
+                            print(f"[SCANNER] Nuclei: descartado finding sem URL — template: {template_id}")
+                            continue
+
+                        # Monta descrição com todos os campos disponíveis
+                        parts = []
+
+                        if matcher:
+                            parts.append(f"Matcher: {matcher}")
+
+                        if template_id:
+                            parts.append(f"Template: {template_id}")
+
+                        if matched_at:
+                            parts.append(f"URL: {matched_at}")
+
+                        if extracted:
+                            parts.append(f"Extraído: {', '.join(str(x) for x in extracted[:5])}")
+
+                        # Descrição do template (ex: "SSL certificate uses weak cipher")
+                        template_desc = info.get('description', '')
+                        if template_desc and len(parts) < 4:
+                            parts.append(f"Detalhe: {template_desc[:200]}")
+
+                        description = ' | '.join(parts)
+
                         vulns.append({
                             'host':        data.get('host'),
                             'tool':        'Nuclei',
-                            'name':        data.get('info', {}).get('name'),
-                            'severity':    data.get('info', {}).get('severity'),
-                            'description': f"Matcher: {data.get('matcher-name')} | URL: {data.get('matched-at')}",
+                            'name':        name,
+                            'severity':    info.get('severity'),
+                            'description': description,
                         })
                     except Exception as e:
                         print(f"[SCANNER] Linha Nuclei inválida: {e}")

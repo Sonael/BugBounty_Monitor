@@ -94,6 +94,13 @@
                 <span class="badge border {{ tool_color }} px-2 py-1 fw-bold">
                     {{ tool_icon }} {{ vuln.tool }}
                 </span>
+
+                {# Nome do template/vulnerabilidade — identifica o que foi encontrado #}
+                {% if vuln.name %}
+                <span class="text-dark fw-semibold" style="font-size:.85rem;">
+                    {{ vuln.name }}
+                </span>
+                {% endif %}
             </div>
 
             <div class="d-flex align-items-center gap-2 flex-shrink-0 ms-2">
@@ -116,25 +123,31 @@
         <div class="p-3">
             {% set desc = vuln.description or '' %}
 
-            {# Nuclei: "Matcher: xxx | URL: https://..." #}
-            {% if 'Matcher:' in desc and 'URL:' in desc %}
+            {# Nuclei: contém "URL:" ou "Template:" na descrição #}
+            {% if 'URL:' in desc or 'Template:' in desc %}
                 {% set parts = desc.split(' | ') %}
                 <div class="row g-2">
                     {% for part in parts %}
                     {% if ':' in part %}
                         {% set kv = part.split(':', 1) %}
+                        {% set key = kv[0].strip() %}
+                        {% set val = kv[1].strip() %}
                         <div class="col-12">
                             <span class="text-muted small fw-bold text-uppercase me-2"
-                                  style="letter-spacing:.5px">{{ kv[0].strip() }}:</span>
-                            {% if kv[0].strip() == 'URL' %}
-                                <a href="{{ kv[1].strip() }}"
+                                  style="letter-spacing:.5px">{{ key }}:</span>
+                            {% if key == 'URL' %}
+                                <a href="{{ val }}"
                                    target="_blank"
                                    rel="noopener noreferrer"
                                    class="font-monospace small text-break text-primary">
-                                    {{ kv[1].strip() }}
+                                    {{ val }}
                                 </a>
+                            {% elif key == 'Template' %}
+                                <code class="small text-primary bg-primary bg-opacity-10 px-2 py-1 rounded">{{ val }}</code>
+                            {% elif key == 'Extraído' %}
+                                <code class="small text-success bg-success bg-opacity-10 px-2 py-1 rounded text-break">{{ val }}</code>
                             {% else %}
-                                <code class="small text-dark bg-light px-2 py-1 rounded">{{ kv[1].strip() }}</code>
+                                <code class="small text-dark bg-light px-2 py-1 rounded">{{ val }}</code>
                             {% endif %}
                         </div>
                     {% endif %}

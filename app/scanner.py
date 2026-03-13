@@ -192,10 +192,10 @@ def scan_nuclei_bulk(targets_file):
 
     cmd = (
         f"nuclei -l {targets_file} "
-        f"-tags cve,misconfig,exposure,tech,panel,xss,sqli,lfi,ssrf,rce,oast,takeover,default-login,token-spray,fuzzing "
-        f"-s low,medium,high,critical "
-        f"-j -silent -timeout 10 -c 50 "
-        f"-retries 2 "
+        f"-tags {NUCLEI_TAGS} "
+        f"-s {NUCLEI_SEVERITY} "
+        f"-j -silent -timeout {NUCLEI_TIMEOUT} -c {NUCLEI_CONCURRENCY} "
+        f"-retries {NUCLEI_RETRIES} "
         f"-o {output}"
     )
     run_command(cmd, timeout=7200)

@@ -123,6 +123,15 @@ def run_scan_task(self, project_id, mode='full'):
 
         history = _open_history(project_id, self.request.id, mode)
 
+        # Inicializa recon_metrics com zeros — será preenchido pela fase recon
+        # se ela rodar. Garante que o vuln scan puro não quebre ao fechar o histórico.
+        recon_metrics = {
+            'new_domains':   0,
+            'alive_hosts':   0,
+            'total_domains': 0,
+            'summary_recon': None,
+        }
+
         try:
             print(f"[WORKER] Iniciando task — Projeto: {project.name} | Modo: {mode}")
 
@@ -376,14 +385,26 @@ def run_scan_task(self, project_id, mode='full'):
                     print(f"[NOTIFY] Embed Recon: {e}")
 
                 total_domains_now = Domain.query.filter_by(project_id=project.id).count()
+
+                # Persiste métricas da fase recon para uso no _close_history final
+                # (necessário para modo 'full' e 'baseline+vuln' onde o histórico
+                # só é fechado ao final do vuln scan)
+                recon_metrics = {
+                    'new_domains':    new_count,
+                    'alive_hosts':    len(alive_data),
+                    'total_domains':  total_domains_now,
+                    'summary_recon':  json.dumps({
+                        'c_2xx': c_2xx, 'c_3xx': c_3xx,
+                        'c_4xx': c_4xx, 'c_5xx': c_5xx,
+                    }),
+                }
+
                 if mode == 'recon' or (mode == 'baseline' and not project.vuln_scan_enabled):
                     _close_history(history, 'completed',
-                                   new_domains=new_count, total_domains=total_domains_now,
-                                   alive_hosts=len(alive_data),
-                                   summary=json.dumps({
-                                       'c_2xx': c_2xx, 'c_3xx': c_3xx,
-                                       'c_4xx': c_4xx, 'c_5xx': c_5xx,
-                                   }))
+                                   new_domains=recon_metrics['new_domains'],
+                                   total_domains=recon_metrics['total_domains'],
+                                   alive_hosts=recon_metrics['alive_hosts'],
+                                   summary=recon_metrics['summary_recon'])
                     project.scan_status = "Concluído"
                     project.scan_message = f"Recon finalizado. {new_count} novos ativos."
                     db.session.commit()
@@ -431,7 +452,10 @@ def run_scan_task(self, project_id, mode='full'):
                         print(f"[NOTIFY] {e}")
 
                     _close_history(history, 'completed',
-                                   total_domains=Domain.query.filter_by(project_id=project.id).count())
+                                   new_domains=recon_metrics.get('new_domains', 0),
+                                   alive_hosts=recon_metrics.get('alive_hosts', 0),
+                                   total_domains=Domain.query.filter_by(project_id=project.id).count(),
+                                   summary=recon_metrics.get('summary_recon'))
                     project.scan_status = "Concluído"
                     project.scan_message = "Nenhum alvo válido pendente."
                     db.session.commit()
@@ -496,12 +520,15 @@ def run_scan_task(self, project_id, mode='full'):
 
                     total_domains_now = Domain.query.filter_by(project_id=project.id).count()
                     _close_history(history, 'completed',
+                                   new_domains=recon_metrics.get('new_domains', 0),
+                                   alive_hosts=recon_metrics.get('alive_hosts', 0),
                                    new_vulns=total_vulns,
                                    total_domains=total_domains_now,
                                    summary=json.dumps({
+                                       'recon':  json.loads(recon_metrics['summary_recon']) if recon_metrics.get('summary_recon') else {},
                                        'nuclei': len(nuclei_vulns),
-                                       'xss': len(xss_vulns),
-                                       'sqli': len(sqli_vulns),
+                                       'xss':    len(xss_vulns),
+                                       'sqli':   len(sqli_vulns),
                                    }))
 
                     project.scan_status = "Concluído"
@@ -691,7 +718,7 @@ def run_daily_scan(mode='full'):
             db.session.commit()
 
         if state.last_daily_scan == today:
-            print("[SCHEDULER] Scan diário já executado hoje.")
+            print("🛑 [SCHEDULER] Scan diário já executado hoje.")
             return
 
         state.last_daily_scan = today

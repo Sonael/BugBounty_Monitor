@@ -12,10 +12,10 @@
             <a href="{{ url_for('main.dashboard') }}" 
                class="btn btn-outline-secondary btn-sm fw-bold shadow-sm"
                aria-label="Voltar para dashboard">
-                <i class="fas fa-arrow-left me-2" aria-hidden="true"></i>Voltar para Dashboard
+                <i class="fas fa-arrow-left me-1" aria-hidden="true"></i>Voltar
             </a>
 
-            <div class="d-flex gap-2" role="group" aria-label="Ações do projeto">
+            <div class="d-flex gap-2 align-items-center" role="group" aria-label="Ações do projeto">
 
                 <!-- Export Dropdown -->
                 <div class="dropdown">
@@ -23,7 +23,8 @@
                             type="button"
                             data-bs-toggle="dropdown"
                             aria-label="Exportar dados">
-                        <i class="fas fa-download me-2" aria-hidden="true"></i>Exportar
+                        <i class="fas fa-download me-1 me-md-2" aria-hidden="true"></i>
+                        <span class="d-none d-sm-inline">Exportar</span>
                     </button>
                     <ul class="dropdown-menu shadow border-0" style="position:fixed; z-index:9999;">
                         <li>
@@ -57,15 +58,19 @@
                         class="btn btn-outline-primary btn-sm fw-bold shadow-sm"
                         data-bs-toggle="modal" 
                         data-bs-target="#editModal"
-                        aria-label="Editar projeto">
-                    <i class="fas fa-edit me-2" aria-hidden="true"></i>Editar
+                        aria-label="Editar projeto"
+                        title="Editar projeto">
+                    <i class="fas fa-edit me-1" aria-hidden="true"></i>
+                    <span class="d-none d-sm-inline">Editar</span>
                 </button>
                 <button type="button" 
                         class="btn btn-outline-danger btn-sm fw-bold shadow-sm" 
                         data-bs-toggle="modal"
                         data-bs-target="#deleteModal"
-                        aria-label="Excluir projeto">
-                    <i class="fas fa-trash-alt me-2" aria-hidden="true"></i>Excluir
+                        aria-label="Excluir projeto"
+                        title="Excluir projeto">
+                    <i class="fas fa-trash-alt me-1" aria-hidden="true"></i>
+                    <span class="d-none d-sm-inline">Excluir</span>
                 </button>
             </div>
         </nav>
@@ -117,7 +122,7 @@
 <article class="card border-0 shadow-sm">
     <header class="card-header bg-white border-bottom-0 pt-4 px-4">
         <nav>
-            <ul class="nav nav-pills" id="projectTabs" role="tablist">
+            <ul class="nav nav-pills project-tabs" id="projectTabs" role="tablist">
                 <!-- Subdomains Tab -->
                 <li class="nav-item" role="presentation">
                     <button class="nav-link active fw-bold border" 

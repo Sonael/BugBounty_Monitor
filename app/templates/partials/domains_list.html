@@ -1,242 +1,283 @@
-<div id="domains-list-container" 
-    hx-get="{{ url_for('main.project_domains_part', id=project.id) }}"
-    hx-trigger="every 5s [!window.pausePolling]"
-    hx-include="[name='q'], [name='status']" 
-    hx-swap="innerHTML settle:0ms"
-    hx-select="#domains-table-content"
-    hx-target="#domains-table-content"
-    role="region"
-    aria-label="Lista de domínios">
+{#
+  domains_list.html — melhorias:
+  1. Badge de status de scan (verificado / pendente) por linha
+  2. Filtros rápidos pill acima da tabela
+  3. Colunas separadas: Status | Portas
+  4. Badge de vulnerabilidades por domínio
+  5. Contador de resultados
+  6. Ordenação clicável por coluna
+#}
+
+{% set sort_by  = sort_by  if sort_by  is defined else 'first_seen' %}
+{% set sort_dir = sort_dir if sort_dir is defined else 'desc' %}
+{% set total_f  = total_filtered if total_filtered is defined else domains|length %}
+
+<div id="domains-list-container"
+     hx-get="{{ url_for('main.project_domains_part', id=project.id) }}"
+     hx-trigger="every 5s [!window.pausePolling]"
+     hx-include="[name='q'], [name='status']"
+     hx-swap="innerHTML settle:0ms"
+     hx-select="#domains-table-content"
+     hx-target="#domains-table-content"
+     role="region"
+     aria-label="Lista de domínios">
 
     <input type="hidden" name="status" value="{{ current_status or '' }}">
+
+
+    <input type="hidden" name="status" value="{{ current_status or '' }}">
+
 
     <div id="domains-table-content">
         <table class="table table-hover align-middle mb-0">
             <thead class="bg-light">
                 <tr>
-                    <th class="border-0 text-secondary small fw-bold text-uppercase ps-4"
-                        style="position: sticky; top: 0; background-color: #f8f9fa; z-index: 2;"
-                        scope="col">
-                        Subdomínio
-                    </th>
-                    <th class="border-0 text-secondary small fw-bold text-uppercase text-center"
-                        style="position: sticky; top: 0; background-color: #f8f9fa; z-index: 2;"
-                        scope="col">
-                        Status / Portas
+                    {# Macro para cabeçalho ordenável #}
+                    {% macro sort_th(col, label, extra_class='') %}
+                        {% set is_active = sort_by == col %}
+                        {% set next_dir  = 'asc' if (is_active and sort_dir == 'desc') else 'desc' %}
+                        <th class="border-0 text-secondary small fw-bold text-uppercase {{ extra_class }}"
+                            style="position:sticky; top:0; background:#f8f9fa; z-index:2; cursor:pointer; user-select:none;"
+                            hx-get="{{ url_for('main.project_domains_part', id=project.id) }}?sort={{ col }}&dir={{ next_dir }}"
+                            hx-target="#domains-content"
+                            hx-swap="innerHTML"
+                            hx-indicator="#domains-skeleton"
+                            title="Ordenar por {{ label }}"
+                            scope="col">
+                            {{ label }}
+                            {% if is_active %}
+                                <i class="fas fa-sort-{{ 'down' if sort_dir == 'desc' else 'up' }} ms-1 text-primary" aria-hidden="true"></i>
+                            {% else %}
+                                <i class="fas fa-sort ms-1 opacity-25" aria-hidden="true"></i>
+                            {% endif %}
+                        </th>
+                    {% endmacro %}
+
+                    {{ sort_th('name',       'Subdomínio',  'ps-4') }}
+                    {{ sort_th('status',     'Status') }}
+                    <th class="border-0 text-secondary small fw-bold text-uppercase"
+                        style="position:sticky; top:0; background:#f8f9fa; z-index:2;" scope="col">
+                        Portas
                     </th>
                     <th class="border-0 text-secondary small fw-bold text-uppercase"
-                        style="position: sticky; top: 0; background-color: #f8f9fa; z-index: 2;"
-                        scope="col">
+                        style="position:sticky; top:0; background:#f8f9fa; z-index:2;" scope="col">
                         Tecnologias
                     </th>
                     <th class="border-0 text-secondary small fw-bold text-uppercase"
-                        style="position: sticky; top: 0; background-color: #f8f9fa; z-index: 2;"
-                        scope="col">
-                        PATHS (FFuf)
+                        style="position:sticky; top:0; background:#f8f9fa; z-index:2;" scope="col">
+                        Paths
                     </th>
                     <th class="border-0 text-secondary small fw-bold text-uppercase"
-                        style="position: sticky; top: 0; background-color: #f8f9fa; z-index: 2;"
-                        scope="col">
-                        Data SSL
+                        style="position:sticky; top:0; background:#f8f9fa; z-index:2;" scope="col">
+                        SSL
                     </th>
-                    <th class="border-0 text-secondary small fw-bold text-uppercase text-end pe-4"
-                        style="position: sticky; top: 0; background-color: #f8f9fa; z-index: 2;"
-                        scope="col">
-                        Descoberto
-                    </th>
+                    {{ sort_th('first_seen', 'Descoberto', 'text-end pe-4') }}
                 </tr>
             </thead>
             <tbody>
                 {% for domain in domains %}
-                <tr>
-                    <!-- Subdomain Name & Details -->
+                <tr class="{{ 'table-danger bg-opacity-10' if domain.vulnerabilities else '' }}">
+
+                    {# ── Coluna 1: Subdomínio + IP + DNS + badges ── #}
                     <td class="ps-4">
-                        <a 
-                            href="https://{{ domain.name }}" 
-                            target="_blank" 
-                            rel="noopener noreferrer"
-                            class="fw-bold text-dark text-decoration-none"
-                            aria-label="Abrir {{ domain.name }} em nova aba">
-                            {{ domain.name }}
-                        </a>
-                        
-                        {% if domain.ip_address %}
-                        <div class="text-muted small mt-1 font-monospace">
-                            <i class="fas fa-network-wired me-1 text-primary opacity-50" aria-hidden="true"></i>
-                            <span>{{ domain.ip_address }}</span>
-                        </div>
-                        {% endif %}
-                        
-                        {% if domain.dns_info %}
-                        <div class="mt-1">
-                            {% for info in domain.dns_info.split(' | ') %}
-                            <div class="d-flex align-items-start text-muted small font-monospace text-break mb-1">
-                                {% if 'MX' in info %}
-                                <i class="fas fa-envelope me-2 mt-1 text-warning opacity-50" title="MX Record" aria-hidden="true"></i>
-                                {% elif 'CNAME' in info %}
-                                <i class="fas fa-route me-2 mt-1 text-info opacity-50" title="CNAME Record" aria-hidden="true"></i>
-                                {% else %}
-                                <i class="fas fa-info-circle me-2 mt-1 opacity-50" aria-hidden="true"></i>
+                        <div class="d-flex align-items-start gap-2">
+                            <div class="flex-grow-1 overflow-hidden">
+                                <div class="d-flex align-items-center gap-2 flex-wrap">
+                                    <a href="https://{{ domain.name }}"
+                                       target="_blank"
+                                       rel="noopener noreferrer"
+                                       class="fw-bold text-dark text-decoration-none"
+                                       aria-label="Abrir {{ domain.name }}">
+                                        {{ domain.name }}
+                                    </a>
+
+                                    {# 4. Badge de vulnerabilidades #}
+                                    {% if domain.vulnerabilities %}
+                                        {% set vuln_count = domain.vulnerabilities | length %}
+                                        {% set severities = domain.vulnerabilities | map(attribute='severity') | list %}
+                                        {% set has_crit = 'critical' in (severities | map('lower') | list) %}
+                                        {% set has_high = 'high' in (severities | map('lower') | list) %}
+                                        <span class="badge {{ 'bg-danger' if has_crit else ('bg-warning text-dark' if has_high else 'bg-secondary') }} rounded-pill"
+                                              title="{{ vuln_count }} vulnerabilidade{{ 's' if vuln_count > 1 else '' }} encontrada{{ 's' if vuln_count > 1 else '' }}">
+                                            <i class="fas fa-bug me-1" aria-hidden="true"></i>{{ vuln_count }}
+                                        </span>
+                                    {% endif %}
+
+                                    {# 1. Status de scan (verificado / pendente) #}
+                                    {% if domain.status_code and domain.status_code in [200, 201, 202, 204, 301, 302, 307, 308] %}
+                                        {% if domain.scanned_vulns %}
+                                            <span class="badge bg-success bg-opacity-10 text-success border border-success rounded-pill"
+                                                  style="font-size:.65rem;" title="Verificado para vulnerabilidades">
+                                                <i class="fas fa-check me-1" aria-hidden="true"></i>Verificado
+                                            </span>
+                                        {% else %}
+                                            <span class="badge bg-warning bg-opacity-10 text-warning border border-warning rounded-pill"
+                                                  style="font-size:.65rem;" title="Aguardando scan de vulnerabilidades">
+                                                <i class="fas fa-clock me-1" aria-hidden="true"></i>Pendente
+                                            </span>
+                                        {% endif %}
+                                    {% endif %}
+                                </div>
+
+                                {% if domain.ip_address %}
+                                <div class="text-muted small mt-1 font-monospace">
+                                    <i class="fas fa-network-wired me-1 text-primary opacity-50" aria-hidden="true"></i>
+                                    {{ domain.ip_address }}
+                                </div>
                                 {% endif %}
-                                <span>{{ info }}</span>
+
+                                {% if domain.dns_info %}
+                                <div class="mt-1">
+                                    {% for info in domain.dns_info.split(' | ') %}
+                                    <div class="d-flex align-items-start text-muted small font-monospace text-break mb-1">
+                                        {% if 'MX' in info %}
+                                            <i class="fas fa-envelope me-2 mt-1 text-warning opacity-50" title="MX" aria-hidden="true"></i>
+                                        {% elif 'CNAME' in info %}
+                                            <i class="fas fa-route me-2 mt-1 text-info opacity-50" title="CNAME" aria-hidden="true"></i>
+                                        {% else %}
+                                            <i class="fas fa-info-circle me-2 mt-1 opacity-50" aria-hidden="true"></i>
+                                        {% endif %}
+                                        <span>{{ info }}</span>
+                                    </div>
+                                    {% endfor %}
+                                </div>
+                                {% endif %}
                             </div>
-                            {% endfor %}
                         </div>
-                        {% endif %}
                     </td>
 
-                    <!-- Status Code & Open Ports -->
-                    <td class="text-center">
+                    {# ── Coluna 2: Status HTTP (separado de Portas) ── #}
+                    <td class="text-center" style="width:80px;">
                         {% if domain.status_code %}
                             {% if domain.status_code < 300 %}
-                            <span class="badge bg-success bg-opacity-10 text-success border border-success" aria-label="Status {{ domain.status_code }}">{{ domain.status_code }}</span>
+                                <span class="badge bg-success bg-opacity-10 text-success border border-success">{{ domain.status_code }}</span>
                             {% elif domain.status_code < 400 %}
-                            <span class="badge bg-info bg-opacity-10 text-info border border-info" aria-label="Status {{ domain.status_code }}">{{ domain.status_code }}</span>
+                                <span class="badge bg-info bg-opacity-10 text-info border border-info">{{ domain.status_code }}</span>
                             {% elif domain.status_code < 500 %}
-                            <span class="badge bg-warning bg-opacity-10 text-warning border border-warning" aria-label="Status {{ domain.status_code }}">{{ domain.status_code }}</span>
+                                <span class="badge bg-warning bg-opacity-10 text-warning border border-warning">{{ domain.status_code }}</span>
                             {% else %}
-                            <span class="badge bg-danger bg-opacity-10 text-danger border border-danger" aria-label="Status {{ domain.status_code }}">{{ domain.status_code }}</span>
+                                <span class="badge bg-danger bg-opacity-10 text-danger border border-danger">{{ domain.status_code }}</span>
                             {% endif %}
                         {% else %}
-                        <span class="badge bg-light text-muted border">-</span>
+                            <span class="badge bg-light text-muted border">—</span>
                         {% endif %}
+                    </td>
 
+                    {# ── Coluna 3: Portas (separado de Status) ── #}
+                    <td style="width:130px;">
                         {% if domain.open_ports %}
-                        {% set ports = domain.open_ports.split(',') %}
-                        <div class="mt-2 d-flex justify-content-center flex-wrap gap-1" role="list" aria-label="Portas abertas">
-                            {% if ports|length > 5 %}
+                            {% set ports = domain.open_ports.split(',') %}
+                            <div class="d-flex flex-wrap gap-1" role="list" aria-label="Portas abertas">
                                 {% for p in ports[:5] %}
                                 <span class="badge bg-primary bg-opacity-10 text-primary border border-primary fw-normal"
-                                    style="font-size: 0.7em;"
-                                    role="listitem">:{{ p.strip() }}</span>
+                                      style="font-size:.7em;" role="listitem">:{{ p.strip() }}</span>
                                 {% endfor %}
-
-                                <button type="button" 
-                                    class="badge bg-secondary border-0 popover-trigger"
-                                    style="font-size: 0.7em; cursor: pointer;"
-                                    data-bs-toggle="popover" 
-                                    data-bs-trigger="focus"
-                                    data-bs-html="true" 
-                                    data-bs-placement="bottom" 
-                                    data-bs-title="Outras Portas"
-                                    data-bs-content="<div class='d-flex flex-wrap gap-1'>{% for p in ports[5:] %}<span class='badge bg-primary bg-opacity-10 text-primary border border-primary fw-normal'>:{{ p.strip() | e }}</span>{% endfor %}</div>"
-                                    aria-label="Ver mais {{ ports|length - 5 }} portas">
+                                {% if ports|length > 5 %}
+                                <button type="button"
+                                        class="badge bg-secondary border-0 popover-trigger"
+                                        style="font-size:.7em; cursor:pointer;"
+                                        data-bs-toggle="popover"
+                                        data-bs-trigger="focus"
+                                        data-bs-html="true"
+                                        data-bs-placement="bottom"
+                                        data-bs-title="Todas as Portas ({{ ports|length }})"
+                                        data-bs-content="<div class='d-flex flex-wrap gap-1'>{% for p in ports[5:] %}<span class='badge bg-primary bg-opacity-10 text-primary border border-primary fw-normal'>:{{ p.strip() | e }}</span>{% endfor %}</div>"
+                                        aria-label="{{ ports|length - 5 }} portas adicionais">
                                     +{{ ports|length - 5 }}
                                 </button>
-                            {% else %}
-                                {% for p in ports %}
-                                <span class="badge bg-primary bg-opacity-10 text-primary border border-primary fw-normal"
-                                    style="font-size: 0.7em;"
-                                    role="listitem">:{{ p.strip() }}</span>
-                                {% endfor %}
-                            {% endif %}
-                        </div>
+                                {% endif %}
+                            </div>
+                        {% else %}
+                            <span class="text-muted opacity-25 small">—</span>
                         {% endif %}
                     </td>
 
-                    <!-- Technologies -->
+                    {# ── Coluna 4: Tecnologias ── #}
                     <td>
                         {% if domain.technologies %}
-                        {% set techs = domain.technologies.split(', ') %}
-                        <div class="d-flex flex-wrap gap-1" role="list" aria-label="Tecnologias detectadas">
-                            {% if techs|length > 5 %}
+                            {% set techs = domain.technologies.split(', ') %}
+                            <div class="d-flex flex-wrap gap-1" role="list">
                                 {% for tech in techs[:5] %}
-                                <span class="badge border fw-normal text-dark bg-light" style="font-size: 0.75rem;" role="listitem">{{ tech }}</span>
+                                <span class="badge border fw-normal text-dark bg-light" style="font-size:.75rem;" role="listitem">{{ tech }}</span>
                                 {% endfor %}
-
+                                {% if techs|length > 5 %}
                                 <button type="button"
-                                    class="badge bg-secondary border-0 popover-trigger"
-                                    style="font-size: 0.75rem; cursor: pointer;"
-                                    data-bs-toggle="popover"
-                                    data-bs-trigger="focus"
-                                    data-bs-html="true"
-                                    data-bs-placement="bottom"
-                                    data-bs-title="Outras Tecnologias"
-                                    data-bs-content="<div class='d-flex flex-wrap gap-1'>{% for tech in techs[5:] %}<span class='badge border fw-normal text-dark bg-light'>{{ tech | e }}</span>{% endfor %}</div>"
-                                    aria-label="Ver mais {{ techs|length - 5 }} tecnologias">
+                                        class="badge bg-secondary border-0 popover-trigger"
+                                        style="font-size:.75rem; cursor:pointer;"
+                                        data-bs-toggle="popover"
+                                        data-bs-trigger="focus"
+                                        data-bs-html="true"
+                                        data-bs-placement="bottom"
+                                        data-bs-title="Outras Tecnologias"
+                                        data-bs-content="<div class='d-flex flex-wrap gap-1'>{% for tech in techs[5:] %}<span class='badge border fw-normal text-dark bg-light'>{{ tech | e }}</span>{% endfor %}</div>"
+                                        aria-label="{{ techs|length - 5 }} tecnologias adicionais">
                                     +{{ techs|length - 5 }}
                                 </button>
-                            {% else %}
-                                {% for tech in techs %}
-                                <span class="badge border fw-normal text-dark bg-light" style="font-size: 0.75rem;" role="listitem">{{ tech }}</span>
-                                {% endfor %}
-                            {% endif %}
-                        </div>
+                                {% endif %}
+                            </div>
                         {% else %}
-                        <span class="text-muted opacity-25 small">-</span>
+                            <span class="text-muted opacity-25 small">—</span>
                         {% endif %}
                     </td>
 
-                    <!-- Discovered Paths -->
-                    <td style="max-width: 250px;">
+                    {# ── Coluna 5: Paths ── #}
+                    <td style="max-width:220px;">
                         {% if domain.discovered_paths %}
-                        {% set paths = domain.discovered_paths.split(',') %}
-                        <div class="d-flex flex-wrap gap-1" role="list" aria-label="Paths descobertos">
-                            {% if paths|length > 5 %}
-                                {% for path in paths[:5] %}
-                                <a href="https://{{ domain.name }}{{ path.strip() }}" 
+                            {% set paths = domain.discovered_paths.split(',') %}
+                            <div class="d-flex flex-wrap gap-1" role="list">
+                                {% for path in paths[:4] %}
+                                <a href="https://{{ domain.name }}{{ path.strip() }}"
                                    target="_blank"
                                    rel="noopener noreferrer"
                                    class="badge bg-secondary text-decoration-none"
-                                   role="listitem"
-                                   aria-label="Abrir {{ path.strip() }} em nova aba">
-                                    <i class="fas fa-external-link-alt me-1" style="font-size: 0.6em;" aria-hidden="true"></i>{{ path.strip() }}
+                                   role="listitem">
+                                    <i class="fas fa-external-link-alt me-1" style="font-size:.6em;" aria-hidden="true"></i>{{ path.strip() }}
                                 </a>
                                 {% endfor %}
-
+                                {% if paths|length > 4 %}
                                 <button type="button"
-                                    class="badge bg-secondary border-0 popover-trigger"
-                                    style="cursor: pointer;"
-                                    data-bs-toggle="popover"
-                                    data-bs-trigger="focus"
-                                    data-bs-html="true"
-                                    data-bs-placement="left"
-                                    data-bs-title="Outros Paths"
-                                    data-bs-content="<div class='d-flex flex-wrap gap-1'>{% for path in paths[5:] %}<a href='https://{{ domain.name }}{{ path.strip() | e }}' target='_blank' rel='noopener noreferrer' class='badge bg-secondary text-decoration-none'><i class='fas fa-external-link-alt me-1' style='font-size: 0.6em;'></i>{{ path.strip() | e }}</a>{% endfor %}</div>"
-                                    aria-label="Ver mais {{ paths|length - 5 }} paths">
-                                    +{{ paths|length - 5 }}
+                                        class="badge bg-secondary border-0 popover-trigger"
+                                        style="cursor:pointer;"
+                                        data-bs-toggle="popover"
+                                        data-bs-trigger="focus"
+                                        data-bs-html="true"
+                                        data-bs-placement="left"
+                                        data-bs-title="Outros Paths"
+                                        data-bs-content="<div class='d-flex flex-wrap gap-1'>{% for path in paths[4:] %}<a href='https://{{ domain.name }}{{ path.strip() | e }}' target='_blank' rel='noopener noreferrer' class='badge bg-secondary text-decoration-none'><i class='fas fa-external-link-alt me-1' style='font-size:.6em;'></i>{{ path.strip() | e }}</a>{% endfor %}</div>"
+                                        aria-label="{{ paths|length - 4 }} paths adicionais">
+                                    +{{ paths|length - 4 }}
                                 </button>
-                            {% else %}
-                                {% for path in paths %}
-                                <a href="https://{{ domain.name }}{{ path.strip() }}" 
-                                   target="_blank"
-                                   rel="noopener noreferrer"
-                                   class="badge bg-secondary text-decoration-none"
-                                   role="listitem"
-                                   aria-label="Abrir {{ path.strip() }} em nova aba">
-                                    <i class="fas fa-external-link-alt me-1" style="font-size: 0.6em;" aria-hidden="true"></i>{{ path.strip() }}
-                                </a>
-                                {% endfor %}
-                            {% endif %}
-                        </div>
+                                {% endif %}
+                            </div>
                         {% else %}
-                        <span class="text-muted opacity-25 small">-</span>
+                            <span class="text-muted opacity-25 small">—</span>
                         {% endif %}
                     </td>
 
-                    <!-- SSL Certificate Date -->
-                    <td class="text-center">
+                    {# ── Coluna 6: SSL ── #}
+                    <td class="text-center" style="width:100px;">
                         {% if domain.creation_date %}
-                        <div class="badge bg-light text-dark border font-monospace" title="Data do certificado mais antigo">
-                            <i class="far fa-calendar-alt me-1 text-muted" aria-hidden="true"></i>
-                            <time datetime="{{ domain.creation_date }}">{{ domain.creation_date }}</time>
-                        </div>
+                            <div class="badge bg-light text-dark border font-monospace" title="Certificado mais antigo">
+                                <i class="far fa-calendar-alt me-1 text-muted" aria-hidden="true"></i>
+                                <time datetime="{{ domain.creation_date }}">{{ domain.creation_date }}</time>
+                            </div>
                         {% else %}
-                        <span class="text-muted opacity-25 small">-</span>
+                            <span class="text-muted opacity-25 small">—</span>
                         {% endif %}
                     </td>
 
-                    <!-- Discovery Date -->
-                    <td class="text-end pe-4 text-muted small">
+                    {# ── Coluna 7: Descoberto ── #}
+                    <td class="text-end pe-4 text-muted small" style="width:100px;">
                         <time datetime="{{ domain.first_seen.isoformat() }}">
-                            {{ domain.first_seen.strftime('%d/%m %H:%M') }}
+                            {{ domain.first_seen.strftime('%d/%m/%y') }}<br>
+                            <span class="opacity-75">{{ domain.first_seen.strftime('%H:%M') }}</span>
                         </time>
                     </td>
                 </tr>
                 {% else %}
                 <tr>
-                    <td colspan="6" class="text-center py-5 text-muted">
-                        <i class="fas fa-search fa-2x mb-3 opacity-25" aria-hidden="true"></i>
+                    <td colspan="7" class="text-center py-5 text-muted">
+                        <i class="fas fa-search fa-2x mb-3 opacity-25 d-block" aria-hidden="true"></i>
                         <p class="mb-0">Nenhum resultado encontrado.</p>
                     </td>
                 </tr>
@@ -250,13 +291,12 @@
     <nav class="d-flex justify-content-between align-items-center px-3 py-2 border-top bg-light"
          aria-label="Paginação de domínios">
         <span class="text-muted small">
-            {{ pagination.total }} domínios —
-            página {{ pagination.page }} de {{ pagination.pages }}
+            {{ total_f }} domínios — página {{ pagination.page }} de {{ pagination.pages }}
         </span>
-        <div class="d-flex gap-1">
+        <div class="d-flex gap-1 flex-wrap">
             {% if pagination.has_prev %}
             <button class="btn btn-sm btn-outline-secondary"
-                    hx-get="{{ url_for('main.project_domains_part', id=project.id) }}?page={{ pagination.prev_num }}"
+                    hx-get="{{ url_for('main.project_domains_part', id=project.id) }}?page={{ pagination.prev_num }}&sort={{ sort_by }}&dir={{ sort_dir }}"
                     hx-target="#domains-content"
                     hx-swap="innerHTML"
                     aria-label="Página anterior">
@@ -267,10 +307,9 @@
             {% for p in pagination.iter_pages(left_edge=1, right_edge=1, left_current=2, right_current=2) %}
                 {% if p %}
                 <button class="btn btn-sm {{ 'btn-primary' if p == pagination.page else 'btn-outline-secondary' }}"
-                        hx-get="{{ url_for('main.project_domains_part', id=project.id) }}?page={{ p }}"
+                        hx-get="{{ url_for('main.project_domains_part', id=project.id) }}?page={{ p }}&sort={{ sort_by }}&dir={{ sort_dir }}"
                         hx-target="#domains-content"
                         hx-swap="innerHTML"
-                        aria-label="Página {{ p }}"
                         {% if p == pagination.page %}aria-current="page"{% endif %}>
                     {{ p }}
                 </button>
@@ -281,7 +320,7 @@
 
             {% if pagination.has_next %}
             <button class="btn btn-sm btn-outline-secondary"
-                    hx-get="{{ url_for('main.project_domains_part', id=project.id) }}?page={{ pagination.next_num }}"
+                    hx-get="{{ url_for('main.project_domains_part', id=project.id) }}?page={{ pagination.next_num }}&sort={{ sort_by }}&dir={{ sort_dir }}"
                     hx-target="#domains-content"
                     hx-swap="innerHTML"
                     aria-label="Próxima página">

@@ -44,7 +44,7 @@ def login_post():
         flash('Login incorreto.', 'error')
         return redirect(url_for('main.index'))
 
-    login_user(user)
+    login_user(user, remember=True)
     return redirect(url_for('main.dashboard'))
 
 
@@ -211,7 +211,7 @@ def _dispatch_or_queue(project, mode):
         print(f"[DISPATCH] {project.name} despachado imediatamente ({ativos+1}/{GLOBAL_SCAN_CONCURRENCY} ativos)")
     else:
         project.scan_status = 'Na fila'
-        project.scan_message = f'Aguardando worker ({ativos}/{GLOBAL_SCAN_CONCURRENCY} em uso)...'
+        project.scan_message = f'Aguardando slot ({ativos}/{GLOBAL_SCAN_CONCURRENCY} em uso)...'
         project.current_task_id = None   # sem task_id = aguarda dispatch_next_pending
         db.session.commit()
         print(f"[DISPATCH] {project.name} enfileirado — slots cheios ({ativos}/{GLOBAL_SCAN_CONCURRENCY})")
@@ -292,7 +292,7 @@ def stop_scan(id):
             history.finished_at = datetime.utcnow()
 
         project.scan_status = 'Parado'
-        project.scan_message = 'Scan interrompido pelo usuário.'
+        project.scan_message = ' Scan interrompido pelo usuário.'
         project.current_task_id = None
         db.session.commit()
 
@@ -539,7 +539,7 @@ def heal_projects_api():
                     h.finished_at = datetime.utcnow()
 
                 p.scan_status = 'Erro'
-                p.scan_message = 'Processo perdido'
+                p.scan_message = ' Processo perdido'
                 p.current_task_id = None
                 changes += 1
 
@@ -629,7 +629,7 @@ def start_global_scan():
     waiting = total - dispatched
     msg = f'{dispatched} scan(s) iniciado(s)'
     if waiting > 0:
-        msg += f', {waiting} aguardando worker.'
+        msg += f', {waiting} aguardando slot.'
     flash(msg, 'success')
     return redirect(url_for('main.dashboard'))
 
@@ -662,7 +662,7 @@ def stop_global_scan():
             h.finished_at = datetime.utcnow()
 
         p.scan_status = 'Parado'
-        p.scan_message = 'Parada Manual (Global)'
+        p.scan_message = ' Parada Manual (Global)'
         p.current_task_id = None
         stopped += 1
 

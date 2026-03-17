@@ -1,3 +1,4 @@
+from datetime import timedelta
 from flask import Flask
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager
@@ -35,13 +36,6 @@ celery = Celery(
 )
 
 # Agendamento do Beat
-# Redireciona stdout/stderr do worker para o logger do Celery
-# Isso faz print() aparecer em: docker compose logs worker
-celery.conf.update(
-    worker_redirect_stdouts=True,
-    worker_redirect_stdouts_level='INFO',
-)
-
 celery.conf.beat_schedule = {
     'scan-all-daily': {
         'task': 'app.tasks.run_daily_scan',
@@ -56,18 +50,26 @@ def create_app():
     # --- Validações de segurança no startup ---
     secret_key = os.environ.get('SECRET_KEY')
     if not secret_key:
-        raise RuntimeError("[CONFIG] SECRET_KEY não definida!")
+        raise RuntimeError(" [CONFIG] SECRET_KEY não definida!")
 
     admin_pass = os.environ.get('ADMIN_PASSWORD')
     if not admin_pass:
         raise RuntimeError(
-            "[CONFIG] ADMIN_PASSWORD não definida! "
+            " [CONFIG] ADMIN_PASSWORD não definida! "
             "Configure no .env antes de iniciar."
         )
 
     app.config['SECRET_KEY'] = secret_key
     app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL')
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
+    # Sessao persistente — nao expira ao fechar o navegador
+    app.config['REMEMBER_COOKIE_DURATION'] = timedelta(days=int(os.environ.get('SESSION_DAYS', 30)))
+    app.config['REMEMBER_COOKIE_SECURE']   = False
+    app.config['REMEMBER_COOKIE_HTTPONLY'] = True
+    app.config['REMEMBER_COOKIE_SAMESITE'] = 'Lax'
+    app.config['SESSION_COOKIE_HTTPONLY']  = True
+    app.config['SESSION_COOKIE_SAMESITE']  = 'Lax'
 
     # CSRF: check default desativado — ativado explicitamente por rota via @csrf.protect.
     # Para habilitar globalmente, adicione csrf.init_app(app) e atualize os templates
@@ -100,22 +102,16 @@ def create_app():
     from .routes import main as main_blueprint
     app.register_blueprint(main_blueprint)
 
-    # Registra comandos CLI extras (flask wait-for-db, flask create-admin)
-    register_commands(app)
-
     # --- Inicialização com retry de conexão ---
-    # Pula wait_for_db em:
-    #  - comandos flask db (init/migrate/upgrade) — Alembic cuida da conexão
-    #  - workers Celery — o worker tem seu próprio init via @worker_init signal
+    # Pula espera pelo banco em comandos CLI que nao precisam dele
+    # (ex: flask db init, flask db migrate)
     import sys
-    _argv0 = sys.argv[0] if sys.argv else ''
-    _is_celery_worker = 'celery' in _argv0 or (len(sys.argv) > 1 and sys.argv[1] in {'-A', 'worker', 'beat'})
-    _is_db_cli = (
+    _skip_db = (
         len(sys.argv) > 2
         and sys.argv[1] == 'db'
         and sys.argv[2] in {'init', 'migrate', 'upgrade'}
     )
-    if not (_is_celery_worker or _is_db_cli):
+    if not _skip_db:
         with app.app_context():
             wait_for_db()
             init_admin_user()
@@ -130,11 +126,9 @@ def register_commands(app):
 
     @app.cli.command("wait-for-db")
     def wait_for_db_cmd():
-        """Aguarda o banco ficar disponível, reseta órfãos e inicializa o admin."""
+        """Aguarda o banco de dados ficar disponível (para uso no entrypoint do Docker)."""
         wait_for_db()
-        reset_orphaned_projects()
-        init_admin_user()
-        print("Banco pronto, projetos verificados e admin confirmado.")
+        print(" Banco pronto.")
 
     @app.cli.command("create-admin")
     def create_admin_cmd():
@@ -152,23 +146,26 @@ def wait_for_db():
     max_retries = 30
     sleep_seconds = 2
 
-    print("[SISTEMA] Aguardando Banco de Dados iniciar...")
+    print(" [SISTEMA] Aguardando Banco de Dados iniciar...")
 
     for i in range(max_retries):
         try:
             db.session.execute(text('SELECT 1'))
             db.session.commit()
-            print("[SISTEMA] Banco de Dados conectado!")
+            print(" [SISTEMA] Banco de Dados conectado!")
+
+            # Aplica migrations pendentes (idempotente — seguro rodar sempre)
+            _apply_migrations()
             return
 
         except OperationalError:
-            print(f"[SISTEMA] Banco indisponível... ({i + 1}/{max_retries})")
+            print(f"  [SISTEMA] Banco indisponível... ({i + 1}/{max_retries})")
             time.sleep(sleep_seconds)
         except Exception as e:
-            print(f"[SISTEMA] Erro inesperado: {e}")
+            print(f"  [SISTEMA] Erro inesperado: {e}")
             time.sleep(sleep_seconds)
 
-    print("[SISTEMA] Falha Crítica: banco não respondeu.")
+    print(" [SISTEMA] Falha Crítica: banco não respondeu.")
     raise Exception("Database connection failed after multiple retries")
 
 
@@ -181,42 +178,16 @@ def _apply_migrations():
     try:
         from flask_migrate import upgrade as db_upgrade
         db_upgrade()
-        print("[MIGRATE] Schema atualizado via Flask-Migrate.")
+        print(" [MIGRATE] Schema atualizado via Flask-Migrate.")
     except Exception as e:
-        print(f"[MIGRATE] Flask-Migrate falhou ({e}), usando db.create_all() como fallback.")
+        print(f"  [MIGRATE] Flask-Migrate falhou ({e}), usando db.create_all() como fallback.")
         try:
             db.create_all()
-            print("[MIGRATE] Tabelas criadas via db.create_all().")
+            print(" [MIGRATE] Tabelas criadas via db.create_all().")
         except Exception as e2:
-            print(f"[MIGRATE] Falha também no create_all: {e2}")
+            print(f" [MIGRATE] Falha também no create_all: {e2}")
             raise
 
-
-
-
-def reset_orphaned_projects():
-    """
-    Reseta projetos que ficaram com status 'Rodando' ou 'Na fila'
-    de um boot anterior. Chamado no startup do web container.
-    Sem isso, projetos aparecem como "rodando" para sempre após restart.
-    """
-    from .models import Project
-
-    orphans = Project.query.filter(
-        Project.scan_status.in_(['Rodando', 'Na fila'])
-    ).all()
-
-    count = len(orphans)
-    if count == 0:
-        return
-
-    for p in orphans:
-        p.scan_status = 'Parado'
-        p.scan_message = 'Interrompido por reinício do servidor.'
-        p.current_task_id = None
-
-    db.session.commit()
-    print(f"[STARTUP] {count} projeto(s) órfão(s) resetados para 'Parado'.")
 
 def init_admin_user(force=False):
     """
@@ -229,45 +200,27 @@ def init_admin_user(force=False):
     admin_pass = os.environ.get('ADMIN_PASSWORD')
 
     if not admin_pass:
-        print("[SETUP] ADMIN_PASSWORD não definida — pulando criação do admin.")
+        print("  [SETUP] ADMIN_PASSWORD não definida — pulando criação do admin.")
         return
 
     try:
         existing = User.query.filter_by(username=admin_user).first()
 
         if not existing:
-            print(f"[SETUP] Criando usuário '{admin_user}'...")
+            print(f"  [SETUP] Criando usuário '{admin_user}'...")
             new_user = User(
                 username=admin_user,
                 password=generate_password_hash(admin_pass, method='pbkdf2:sha256')
             )
             db.session.add(new_user)
             db.session.commit()
-            print("[SETUP] Admin criado com sucesso!")
+            print(" [SETUP] Admin criado com sucesso!")
 
         elif force:
-            print(f"[SETUP] Atualizando senha do usuário '{admin_user}'...")
+            print(f"  [SETUP] Atualizando senha do usuário '{admin_user}'...")
             existing.password = generate_password_hash(admin_pass, method='pbkdf2:sha256')
             db.session.commit()
-            print("[SETUP] Senha atualizada.")
+            print(" [SETUP] Senha atualizada.")
 
     except Exception as e:
-        print(f"[SETUP] Aviso ao verificar Admin: {e}")
-
-# ---------------------------------------------------------------------------
-# Inicialização do worker Celery (executado UMA VEZ por processo worker)
-# ---------------------------------------------------------------------------
-from celery.signals import worker_init
-
-@worker_init.connect
-def init_worker(**kwargs):
-    """
-    Inicializa o Flask app e conecta ao banco UMA VEZ quando o worker sobe.
-    Sem isso, create_app() seria chamado em cada task — lento e arriscado.
-    """
-    print("[WORKER INIT] Inicializando Flask app no worker...")
-    app = create_app()
-    # Força a criação do app context para que o db esteja pronto
-    ctx = app.app_context()
-    ctx.push()
-    print("[WORKER INIT] Worker pronto para processar tasks.")
+        print(f"  [SETUP] Aviso ao verificar Admin: {e}")

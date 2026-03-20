@@ -116,6 +116,7 @@ def create_app():
             wait_for_db()
             init_admin_user()
 
+    register_commands(app)
     return app
 
 

@@ -22,6 +22,34 @@ from .scanner import (
 # ---------------------------------------------------------------------------
 _flask_app = None
 
+
+# ---------------------------------------------------------------------------
+# Worker init — inicializa Flask app UMA VEZ por processo worker
+# e redireciona print() para os logs do Celery
+# ---------------------------------------------------------------------------
+try:
+    from celery.signals import worker_init
+
+    @worker_init.connect
+    def init_worker(**kwargs):
+        global _flask_app
+        from app import create_app
+        _flask_app = create_app()
+        print("[WORKER] Flask app inicializado no worker process.")
+
+except Exception as _e:
+    print(f"[WORKER] worker_init signal nao disponivel: {_e}")
+
+# Redireciona print() para stdout do Celery (visivel em docker-compose logs)
+from celery.app.log import TaskFormatter  # noqa
+try:
+    from celery import current_app as _celery_app
+    _celery_app.conf.worker_redirect_stdouts = True
+    _celery_app.conf.worker_redirect_stdouts_level = 'INFO'
+except Exception:
+    pass
+
+
 def _get_app():
     """
     Retorna o Flask app cacheado.

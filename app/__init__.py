@@ -35,6 +35,11 @@ celery = Celery(
     include=['app.tasks']
 )
 
+# Redireciona print() dos workers para stdout — deve estar no nivel do modulo
+# para ter efeito antes do Celery configurar o logging
+celery.conf.worker_redirect_stdouts       = True
+celery.conf.worker_redirect_stdouts_level = 'INFO'
+
 # Agendamento do Beat
 celery.conf.beat_schedule = {
     'scan-all-daily': {

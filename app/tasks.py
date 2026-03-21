@@ -7,6 +7,7 @@ from datetime import datetime, date
 
 from . import celery, db
 from .models import Project, Domain, Vulnerability, ScanHistory, Port
+
 from .scanner import (
     find_subdomains, check_alive, scan_nuclei_bulk,
     scan_crawling_xss_bulk, scan_sqlmap_bulk,
@@ -24,28 +25,37 @@ _flask_app = None
 
 
 # ---------------------------------------------------------------------------
-# Worker init — inicializa Flask app UMA VEZ por processo worker
-# e redireciona print() para os logs do Celery
+# worker_init — processo PAI, antes do fork
+# Ativa redirect de stdout para que filhos herdem via fork
 # ---------------------------------------------------------------------------
 try:
     from celery.signals import worker_init
 
     @worker_init.connect
-    def init_worker(**kwargs):
-        global _flask_app
-        from app import create_app
-        _flask_app = create_app()
-        print("[WORKER] Flask app inicializado no worker process.")
+    def on_worker_init(**kwargs):
+        from celery import current_app as _app
+        _app.conf.worker_redirect_stdouts       = True
+        _app.conf.worker_redirect_stdouts_level = 'INFO'
 
-except Exception as _e:
-    print(f"[WORKER] worker_init signal nao disponivel: {_e}")
+except Exception:
+    pass
 
-# Redireciona print() para stdout do Celery (visivel em docker-compose logs)
-from celery.app.log import TaskFormatter  # noqa
+# ---------------------------------------------------------------------------
+# worker_process_init — cada processo FILHO, apos o fork
+# Reseta sessao SQLAlchemy herdada do pai (evita ResourceClosedError)
+# ---------------------------------------------------------------------------
 try:
-    from celery import current_app as _celery_app
-    _celery_app.conf.worker_redirect_stdouts = True
-    _celery_app.conf.worker_redirect_stdouts_level = 'INFO'
+    from celery.signals import worker_process_init
+
+    @worker_process_init.connect
+    def on_worker_process_init(**kwargs):
+        try:
+            from app import db as _db
+            _db.engine.dispose()
+            _db.session.remove()
+        except Exception:
+            pass
+
 except Exception:
     pass
 
@@ -132,7 +142,24 @@ def run_scan_task(self, project_id, mode='full'):
     app = _get_app()
 
     with app.app_context():
-        project = Project.query.get(project_id)
+        # Garante sessao limpa antes de qualquer query
+        try:
+            db.session.remove()
+            db.session.close()
+        except Exception:
+            pass
+
+        try:
+            project = Project.query.get(project_id)
+        except Exception as e:
+            print(f"[WORKER CRITICAL] Falha ao carregar projeto {project_id}: {e}")
+            try:
+                db.session.rollback()
+                db.session.remove()
+                project = Project.query.get(project_id)
+            except Exception as e2:
+                print(f"[WORKER CRITICAL] Falha definitiva: {e2}")
+                return
         if not project:
             print(f"[WORKER] Projeto ID {project_id} não encontrado!")
             return
@@ -143,10 +170,7 @@ def run_scan_task(self, project_id, mode='full'):
         if (project.current_task_id
                 and project.current_task_id != self.request.id
                 and project.scan_status in ['Rodando', 'Na fila']):
-            print(
-                f"[WORKER] IGNORADO: {project.name} já tem task "
-                f"{project.current_task_id}, esta é {self.request.id}."
-            )
+            print(f"[WORKER] IGNORADO: {project.name} ja tem task {project.current_task_id}, esta e {self.request.id}.")
             return "Duplicata ignorada"
 
         history = _open_history(project_id, self.request.id, mode)
@@ -621,7 +645,7 @@ def dispatch_next_pending():
         r = None
 
     if not acquired:
-        print("[QUEUE] Outro worker já está despachando. Ignorando.")
+        print("[QUEUE] Outro worker ja esta despachando. Ignorando.")
         return
 
     try:
@@ -746,7 +770,7 @@ def run_daily_scan(mode='full'):
             db.session.commit()
 
         if state.last_daily_scan == today:
-            print("🛑 [SCHEDULER] Scan diário já executado hoje.")
+            print("[SCHEDULER] Scan diario ja executado hoje.")
             return
 
         state.last_daily_scan = today
@@ -758,7 +782,7 @@ def run_daily_scan(mode='full'):
             if proj.scan_status == 'Rodando':
                 continue
             if proj.scan_status == 'Na fila' and proj.current_task_id:
-                print(f"[SCHEDULER] Pular {proj.name}: já na fila.")
+                print(f"[SCHEDULER] Pular {proj.name}: ja na fila.")
                 continue
 
             # Pré-gera task ID e salva ANTES do dispatch (evita race condition)
@@ -768,6 +792,6 @@ def run_daily_scan(mode='full'):
             proj.scan_message = 'Aguardando início (Agendado)...'
             db.session.flush()
             run_scan_task.apply_async(args=[proj.id, mode], task_id=task_id)
-            print(f"[SCHEDULER] Agendado {proj.name} → task {task_id}")
+            print(f"[SCHEDULER] Agendado {proj.name} - task {task_id}")
 
         db.session.commit()

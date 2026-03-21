@@ -37,11 +37,9 @@ services:
   worker:
     build: .
     command:
-      - bash
-      - -c
-      - |
-        flask wait-for-db &&
-        celery -A app.celery worker --loglevel=info --concurrency=2 --prefetch-multiplier=1 --max-tasks-per-child=50
+      - "bash"
+      - "-c"
+      - "flask wait-for-db && celery -A app.celery worker --loglevel=info --concurrency=2 --prefetch-multiplier=1 --max-tasks-per-child=50" 
     volumes:
       - .:/app
     env_file:
@@ -67,10 +65,7 @@ services:
   # -------------------------------------------------------------------------
   beat:
     build: .
-    command:
-      - bash
-      - -c
-      - celery -A app.celery beat --loglevel=info --scheduler celery.beat:PersistentScheduler
+    command: celery -A app.celery beat --loglevel=info --scheduler --concurrency=2 --prefetch-multiplier=1 celery.beat:PersistentScheduler
     volumes:
       - .:/app
       - celerybeat_data:/var/celerybeat

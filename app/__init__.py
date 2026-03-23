@@ -111,11 +111,23 @@ def create_app():
     # Pula espera pelo banco em comandos CLI que nao precisam dele
     # (ex: flask db init, flask db migrate)
     import sys
+
+    # Pula inicializacao pesada quando rodando dentro de um Celery worker
+    # (flask db, celery worker, celery beat) — evita bloquear tasks por 30-40s
+    _celery_worker = any(
+        arg in sys.argv[0]
+        for arg in ['celery', 'worker', 'beat']
+    ) or 'celery' in ' '.join(sys.argv)
+
     _skip_db = (
-        len(sys.argv) > 2
-        and sys.argv[1] == 'db'
-        and sys.argv[2] in {'init', 'migrate', 'upgrade'}
+        _celery_worker
+        or (
+            len(sys.argv) > 2
+            and sys.argv[1] == 'db'
+            and sys.argv[2] in {'init', 'migrate', 'upgrade'}
+        )
     )
+
     if not _skip_db:
         with app.app_context():
             wait_for_db()

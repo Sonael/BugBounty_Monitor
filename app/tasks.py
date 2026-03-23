@@ -23,23 +23,6 @@ from .scanner import (
 # ---------------------------------------------------------------------------
 _flask_app = None
 
-
-# ---------------------------------------------------------------------------
-# worker_init — processo PAI, antes do fork
-# Ativa redirect de stdout para que filhos herdem via fork
-# ---------------------------------------------------------------------------
-try:
-    from celery.signals import worker_init
-
-    @worker_init.connect
-    def on_worker_init(**kwargs):
-        from celery import current_app as _app
-        _app.conf.worker_redirect_stdouts       = True
-        _app.conf.worker_redirect_stdouts_level = 'INFO'
-
-except Exception:
-    pass
-
 # ---------------------------------------------------------------------------
 # worker_process_init — cada processo FILHO, apos o fork
 # Reseta sessao SQLAlchemy herdada do pai (evita ResourceClosedError)
@@ -161,7 +144,7 @@ def run_scan_task(self, project_id, mode='full'):
                 print(f"[WORKER CRITICAL] Falha definitiva: {e2}")
                 return
         if not project:
-            print(f"[WORKER] Projeto ID {project_id} não encontrado!")
+            print(f"[WORKER] Projeto ID {project_id} nao encontrado!")
             return
 
         # Bloqueia apenas se já existe OUTRO task ID ativo no banco.

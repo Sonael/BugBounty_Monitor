@@ -107,6 +107,7 @@ COPY . .
 RUN nuclei -update-templates || true
 
 ENV FLASK_APP=app/__init__.py
+ENV PYTHONUNBUFFERED=1
 
 # Pasta para o schedule persistente do Celery Beat
 RUN mkdir -p /var/celerybeat

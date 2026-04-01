@@ -67,18 +67,21 @@ services:
   # -------------------------------------------------------------------------
   beat:
     build: .
-    command: celery -A app.celery beat --loglevel=info --scheduler --concurrency=2 --prefetch-multiplier=1 celery.beat:PersistentScheduler
+    command:
+      - "bash"
+      - "-c"
+      - "flask wait-for-db && celery -A app.celery beat --loglevel=info --scheduler=celery.beat:PersistentScheduler --schedule=/var/celerybeat/celerybeat-schedule"
     volumes:
       - .:/app
       - celerybeat_data:/var/celerybeat
     env_file:
       - .env
     depends_on:
+      db:
+        condition: service_healthy
       redis:
         condition: service_healthy
     restart: unless-stopped
-    environment:
-      - CELERYBEAT_SCHEDULE_FILENAME=/var/celerybeat/celerybeat-schedule
 
   # -------------------------------------------------------------------------
   # PostgreSQL

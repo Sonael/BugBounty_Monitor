@@ -12,7 +12,8 @@ from .scanner import (
     find_subdomains, check_alive, scan_nuclei_bulk,
     scan_crawling_xss_bulk, scan_sqlmap_bulk,
     scan_naabu_bulk, run_dig_info, send_discord_embed,
-    scan_ffuf, scan_cmseek, get_first_seen_crtsh
+    scan_ffuf, scan_cmseek, get_first_seen_crtsh,
+    CMSEEK_MAX_HOSTS, NAABU_FULL_SWEEP,
 )
 
 
@@ -210,9 +211,11 @@ def run_scan_task(self, project_id, mode='full'):
                 ]
                 print(f"[WORKER] Lista final: {len(found_subs)} domínios.")
 
-                # HTTPX antes do Naabu — só escaneia portas de hosts vivos.
+                # Pipeline 3-fase: HTTPX (80/443) → Naabu → HTTPX nas portas novas.
+                # Sem a 2ª passada de HTTPX, hosts respondendo só em :8080/:8443/etc
+                # ficavam como dead e nunca recebiam vuln scan.
                 if found_subs:
-                    project.scan_message = f"2/4 Verificando {len(found_subs)} subdomínios (HTTPX)..."
+                    project.scan_message = f"2/5 Verificando {len(found_subs)} subdomínios (HTTPX)..."
                     db.session.commit()
                     try:
                         alive_data = check_alive(found_subs)
@@ -230,14 +233,20 @@ def run_scan_task(self, project_id, mode='full'):
                         seen_alive.add(c)
                         alive_hosts_for_naabu.append(c)
 
+                # NAABU_FULL_SWEEP escaneia TODOS os subs — captura hosts
+                # respondendo só em portas alternativas (admin :8080/:8443) ao
+                # custo de 5-10× mais tempo de scan.
+                naabu_targets = found_subs if NAABU_FULL_SWEEP else alive_hosts_for_naabu
+
                 naabu_data = {}
-                if alive_hosts_for_naabu:
-                    project.scan_message = f"3/4 Escaneando portas em {len(alive_hosts_for_naabu)} hosts (Naabu)..."
+                if naabu_targets:
+                    sweep_label = "FULL SWEEP" if NAABU_FULL_SWEEP else "hosts vivos"
+                    project.scan_message = f"3/5 Escaneando portas em {len(naabu_targets)} ({sweep_label}) (Naabu)..."
                     db.session.commit()
                     temp_naabu = f"subs_naabu_{project.id}_{uuid.uuid4().hex}.txt"
                     try:
                         with open(temp_naabu, 'w') as f:
-                            f.write("\n".join(alive_hosts_for_naabu))
+                            f.write("\n".join(naabu_targets))
                         naabu_data = scan_naabu_bulk(temp_naabu)
                     except Exception as e:
                         print(f"[WORKER] Naabu falhou: {e}")
@@ -245,24 +254,65 @@ def run_scan_task(self, project_id, mode='full'):
                         if os.path.exists(temp_naabu):
                             os.remove(temp_naabu)
 
+                # 2ª passada HTTPX com portas descobertas (≠ 80/443) — captura
+                # painéis admin que respondem só em portas alternativas.
+                extra_ports = set()
+                hosts_with_extras = set()
+                for host, ports_str in naabu_data.items():
+                    for p in ports_str.split(','):
+                        p = p.strip()
+                        if p.isdigit() and int(p) not in (80, 443):
+                            extra_ports.add(int(p))
+                            hosts_with_extras.add(host)
+
+                if extra_ports and hosts_with_extras:
+                    project.scan_message = f"4/5 Re-verificando {len(hosts_with_extras)} hosts em portas extras..."
+                    db.session.commit()
+                    try:
+                        extra_alive = check_alive(list(hosts_with_extras), extra_ports=extra_ports)
+                        # Merge: cada (host:porta) entra como entry separada em alive_data.
+                        existing_urls = {i['url'] for i in alive_data}
+                        for item in extra_alive:
+                            if item['url'] not in existing_urls:
+                                alive_data.append(item)
+                                existing_urls.add(item['url'])
+                    except Exception as e:
+                        print(f"[WORKER] HTTPX (2ª passada) falhou: {e}")
+
                 status_map = {}
                 tech_map   = {}
                 ip_map     = {}
                 url_map    = {}
                 for item in alive_data:
                     c = item['url'].replace('https://', '').replace('http://', '').split('/')[0].split(':')[0]
-                    status_map[c] = item['status']
-                    tech_map[c]   = item.get('tech', [])
-                    ip_map[c]     = item.get('ip')
-                    url_map[c]    = item['url']
+                    # Mantém a entrada com status mais "alive" (1ª que vier funciona).
+                    if c not in status_map:
+                        status_map[c] = item['status']
+                        tech_map[c]   = item.get('tech', [])
+                        ip_map[c]     = item.get('ip')
+                        url_map[c]    = item['url']
+                    elif item.get('tech'):
+                        existing_tech = set(tech_map.get(c, []))
+                        existing_tech.update(item['tech'])
+                        tech_map[c] = list(existing_tech)
 
                 domain_map  = {d.name: d for d in Domain.query.filter_by(project_id=project.id).all()}
                 new_count   = 0
                 total_paths = 0
                 new_alive_subs = []
 
-                project.scan_message = "4/4 Processando Alvos (DNS + Fuzzing + SSL)..."
+                project.scan_message = "5/5 Processando Alvos (DNS + Fuzzing + SSL)..."
                 db.session.commit()
+
+                # CMSeeK não tem modo batch — pula em projetos grandes para
+                # não bloquear o scan por horas.
+                cmseek_eligible_count = sum(
+                    1 for s in found_subs
+                    if status_map.get(s) in (200, 201, 202, 204, 301, 302, 307, 308, 403)
+                )
+                cmseek_enabled = cmseek_eligible_count <= CMSEEK_MAX_HOSTS
+                if not cmseek_enabled:
+                    print(f"[WORKER] CMSeeK pulado: {cmseek_eligible_count} hosts > CMSEEK_MAX_HOSTS={CMSEEK_MAX_HOSTS}")
 
                 for sub in found_subs:
                     domain_obj = domain_map.get(sub)
@@ -314,15 +364,16 @@ def run_scan_task(self, project_id, mode='full'):
                     if should_fuzz and code in [200, 201, 202, 204, 301, 302, 307, 308, 403]:
                         target_url = url_map.get(sub, f"https://{sub}")
                         print(f"[WORKER] Fuzzing em: {sub}")
-                        try:
-                            cms = scan_cmseek(target_url)
-                            if cms:
-                                domain_obj.technologies = (
-                                    f"{domain_obj.technologies}, {cms}"
-                                    if domain_obj.technologies else cms
-                                )
-                        except Exception as e:
-                            print(f"[WORKER] CMSeeK falhou em {sub}: {e}")
+                        if cmseek_enabled:
+                            try:
+                                cms = scan_cmseek(target_url)
+                                if cms:
+                                    domain_obj.technologies = (
+                                        f"{domain_obj.technologies}, {cms}"
+                                        if domain_obj.technologies else cms
+                                    )
+                            except Exception as e:
+                                print(f"[WORKER] CMSeeK falhou em {sub}: {e}")
 
                         try:
                             f_res = scan_ffuf(target_url)
@@ -484,6 +535,10 @@ def run_scan_task(self, project_id, mode='full'):
                     xss_vulns = scan_crawling_xss_bulk(target_file)
                     process_vulns(xss_vulns, project.id)
 
+                    # SQLMap faz detecção WAF per-host internamente (cache 24h)
+                    # e separa em batches: com tamper/delay e sem.
+                    project.scan_message = "Rodando SQLMap (com detecção WAF per-host)..."
+                    db.session.commit()
                     sqli_vulns = scan_sqlmap_bulk(target_file)
                     process_vulns(sqli_vulns, project.id)
 

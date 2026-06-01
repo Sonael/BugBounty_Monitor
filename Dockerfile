@@ -78,10 +78,21 @@ RUN git clone https://github.com/Tuhinshubhra/CMSeeK /opt/CMSeeK \
     && cd /opt/CMSeeK \
     && pip install -r requirements.txt
 
-# Wordlist para FFuf
+# Wordlists para FFuf — raft-medium-directories é o default; common.txt fica como fallback.
 RUN mkdir -p /opt/wordlists \
     && wget -q -O /opt/wordlists/common.txt \
-       https://raw.githubusercontent.com/danielmiessler/SecLists/master/Discovery/Web-Content/common.txt
+       https://raw.githubusercontent.com/danielmiessler/SecLists/master/Discovery/Web-Content/common.txt \
+    && wget -q -O /opt/wordlists/raft-medium-directories.txt \
+       https://raw.githubusercontent.com/danielmiessler/SecLists/master/Discovery/Web-Content/raft-medium-directories.txt \
+    && wget -q -O /opt/wordlists/raft-large-directories.txt \
+       https://raw.githubusercontent.com/danielmiessler/SecLists/master/Discovery/Web-Content/raft-large-directories.txt
+
+# wafw00f para detecção de WAF antes do vuln scan (ajusta tamper/delay no SQLMap).
+RUN pip install --no-cache-dir wafw00f==2.2.0
+
+# Diretórios para configs de API keys do Subfinder/Amass — montados via volume
+# no docker-compose (configs/subfinder.yaml e configs/amass.ini opcionais).
+RUN mkdir -p /root/.config/subfinder /root/.config/amass
 
 # ── Dependências Python ───────────────────────────────────────────────────
 

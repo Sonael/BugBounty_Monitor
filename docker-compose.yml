@@ -42,6 +42,10 @@ services:
       - "flask wait-for-db && celery -A app.celery worker --loglevel=info --concurrency=2 --prefetch-multiplier=1 --max-tasks-per-child=50"
     volumes:
       - .:/app
+      # API keys do Subfinder/Amass (opcional). Crie ./configs/subfinder.yaml
+      # e ./configs/amass.ini a partir dos .example.
+      - ./configs/subfinder.yaml:/root/.config/subfinder/provider-config.yaml:ro
+      - ./configs/amass.ini:/root/.config/amass/config.ini:ro
     env_file:
       - .env
     environment:

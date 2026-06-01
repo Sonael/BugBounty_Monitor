@@ -1,0 +1,32 @@
+# Subfinder provider config (formato v2.6+).
+# Sem keys = só fontes públicas funcionam (~30% do potencial).
+# Veja https://docs.projectdiscovery.io/tools/subfinder/install para a lista
+# completa de providers suportados.
+#
+# Exemplos:
+# shodan:
+#   - SHODAN_API_KEY
+# censys:
+#   - "CENSYS_ID:CENSYS_SECRET"
+# securitytrails:
+#   - SECURITYTRAILS_API_KEY
+# virustotal:
+#   - VIRUSTOTAL_API_KEY
+# github:
+#   - GITHUB_TOKEN
+# chaos:
+#   - CHAOS_API_KEY
+# binaryedge:
+#   - BINARYEDGE_API_KEY
+# bevigil:
+#   - BEVIGIL_API_KEY
+# fofa:
+#   - "FOFA_EMAIL:FOFA_KEY"
+# fullhunt:
+#   - FULLHUNT_API_KEY
+# intelx:
+#   - "intelx.io:INTELX_KEY"
+# leakix:
+#   - LEAKIX_KEY
+# netlas:
+#   - NETLAS_API_KEY

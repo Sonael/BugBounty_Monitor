@@ -8,6 +8,7 @@ from flask_limiter.util import get_remote_address
 from flask_wtf.csrf import CSRFProtect
 from celery import Celery
 from celery.schedules import crontab
+from werkzeug.middleware.proxy_fix import ProxyFix
 import os
 import time
 from werkzeug.security import generate_password_hash
@@ -19,28 +20,24 @@ login_manager = LoginManager()
 migrate = Migrate()
 csrf = CSRFProtect()
 
-# Limiter usa Redis como storage para manter contagens entre reinicializações
-# (se Redis não estiver disponível, cai para memória local silenciosamente)
+# Redis db 2 para o limiter — db 0 é o broker Celery, db 1 é cache da app.
 limiter = Limiter(
     key_func=get_remote_address,
-    default_limits=[],   # sem limite global — aplicamos por rota
+    default_limits=[],
     storage_uri=os.environ.get('CELERY_BROKER_URL', 'redis://redis:6379/0').replace('/0', '/2'),
     strategy="fixed-window",
 )
 
-# Configuração Global do Celery
 celery = Celery(
     __name__,
     broker=os.environ.get('CELERY_BROKER_URL'),
     include=['app.tasks']
 )
 
-# Redireciona print() dos workers para stdout — deve estar no nivel do modulo
-# para ter efeito antes do Celery configurar o logging
+# Em nível de módulo para ter efeito antes do Celery configurar o logging.
 celery.conf.worker_redirect_stdouts       = True
 celery.conf.worker_redirect_stdouts_level = 'INFO'
 
-# Agendamento do Beat
 celery.conf.beat_schedule = {
     'scan-all-daily': {
         'task': 'app.tasks.run_daily_scan',
@@ -50,9 +47,13 @@ celery.conf.beat_schedule = {
 
 
 def create_app():
+    """Constrói e configura a instância Flask da aplicação."""
     app = Flask(__name__)
 
-    # --- Validações de segurança no startup ---
+    # Confia em X-Forwarded-* (1 proxy). Sem isso o rate-limit usa o IP
+    # do proxy e bloqueia todos os usuários simultaneamente.
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
+
     secret_key = os.environ.get('SECRET_KEY')
     if not secret_key:
         raise RuntimeError(" [CONFIG] SECRET_KEY não definida!")
@@ -68,7 +69,6 @@ def create_app():
     app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL')
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-    # Sessao persistente — nao expira ao fechar o navegador
     app.config['REMEMBER_COOKIE_DURATION'] = timedelta(days=int(os.environ.get('SESSION_DAYS', 30)))
     app.config['REMEMBER_COOKIE_SECURE']   = False
     app.config['REMEMBER_COOKIE_HTTPONLY'] = True
@@ -76,21 +76,15 @@ def create_app():
     app.config['SESSION_COOKIE_HTTPONLY']  = True
     app.config['SESSION_COOKIE_SAMESITE']  = 'Lax'
 
-    # CSRF: check default desativado — ativado explicitamente por rota via @csrf.protect.
-    # Para habilitar globalmente, adicione csrf.init_app(app) e atualize os templates
-    # com {{ csrf_token() }} nos formulários (ver MIGRATION_GUIDE.md).
-    app.config['WTF_CSRF_CHECK_DEFAULT'] = False
-    app.config['WTF_CSRF_HEADERS'] = ['X-CSRFToken']  # suporte a AJAX/HTMX
+    app.config['WTF_CSRF_CHECK_DEFAULT'] = True
+    app.config['WTF_CSRF_HEADERS'] = ['X-CSRFToken']
 
-    # Redis db 1 separado do Celery (db 0) para não poluir filas
     app.config['REDIS_URL'] = (
         os.environ.get('CELERY_BROKER_URL', 'redis://redis:6379/0').replace('/0', '/1')
     )
 
-    # Sincroniza config do Celery com Flask
     celery.conf.update(app.config)
 
-    # Inicializa extensões
     db.init_app(app)
     migrate.init_app(app, db)
     login_manager.init_app(app)
@@ -107,13 +101,10 @@ def create_app():
     from .routes import main as main_blueprint
     app.register_blueprint(main_blueprint)
 
-    # --- Inicialização com retry de conexão ---
-    # Pula espera pelo banco em comandos CLI que nao precisam dele
-    # (ex: flask db init, flask db migrate)
     import sys
 
-    # Pula inicializacao pesada quando rodando dentro de um Celery worker
-    # (flask db, celery worker, celery beat) — evita bloquear tasks por 30-40s
+    # Pula init pesado quando o processo é worker/beat do Celery —
+    # caso contrário o worker bloqueia 30-40s tentando conectar no DB.
     _celery_worker = any(
         arg in sys.argv[0]
         for arg in ['celery', 'worker', 'beat']
@@ -132,19 +123,54 @@ def create_app():
         with app.app_context():
             wait_for_db()
             init_admin_user()
+            reset_orphaned_scans()
 
     register_commands(app)
     return app
 
 
-# --- CLI commands ---
+def reset_orphaned_scans():
+    """Reseta scans que ficaram 'Rodando'/'Na fila' após reinicialização.
+
+    Sem isso o auto-heal marca todos como 'Erro: Processo perdido' no
+    primeiro polling após o boot — confuso para o usuário.
+    """
+    try:
+        from .models import Project, ScanHistory
+        from datetime import datetime as _dt
+
+        orphaned = Project.query.filter(
+            Project.scan_status.in_(['Rodando', 'Na fila'])
+        ).all()
+
+        if not orphaned:
+            return
+
+        for p in orphaned:
+            h = ScanHistory.query.filter_by(
+                project_id=p.id, status='running'
+            ).order_by(ScanHistory.started_at.desc()).first()
+            if h:
+                h.status = 'stopped'
+                h.finished_at = _dt.utcnow()
+
+            p.scan_status = 'Parado'
+            p.scan_message = 'Interrompido por reinicialização do sistema.'
+            p.current_task_id = None
+
+        db.session.commit()
+        print(f" [STARTUP] {len(orphaned)} scan(s) órfão(s) resetado(s).")
+    except Exception as e:
+        db.session.rollback()
+        print(f"  [STARTUP] Falha ao resetar scans órfãos: {e}")
+
 
 def register_commands(app):
     """Registra comandos Flask CLI extras."""
 
     @app.cli.command("wait-for-db")
     def wait_for_db_cmd():
-        """Aguarda o banco de dados ficar disponível (para uso no entrypoint do Docker)."""
+        """Aguarda o banco de dados ficar disponível (usado pelo entrypoint do Docker)."""
         wait_for_db()
         print(" Banco pronto.")
 
@@ -155,11 +181,10 @@ def register_commands(app):
 
 
 def wait_for_db():
-    """
-    Aguarda o banco responder antes de prosseguir.
-    Resolve o race condition do Docker onde o app sobe antes do Postgres.
-    Ao invés de criar tabelas aqui (responsabilidade do Flask-Migrate),
-    apenas verifica a conexão.
+    """Aguarda o banco responder e aplica migrations pendentes.
+
+    Resolve o race do docker-compose onde o app sobe antes do Postgres.
+    Não cria tabelas diretamente — delega ao Flask-Migrate.
     """
     max_retries = 30
     sleep_seconds = 2
@@ -171,8 +196,6 @@ def wait_for_db():
             db.session.execute(text('SELECT 1'))
             db.session.commit()
             print(" [SISTEMA] Banco de Dados conectado!")
-
-            # Aplica migrations pendentes (idempotente — seguro rodar sempre)
             _apply_migrations()
             return
 
@@ -188,11 +211,7 @@ def wait_for_db():
 
 
 def _apply_migrations():
-    """
-    Tenta aplicar migrations via Flask-Migrate.
-    Cai para db.create_all() se a pasta migrations/ ainda não existir
-    (primeiro deploy antes de rodar 'flask db init').
-    """
+    """Aplica migrations Flask-Migrate, com fallback para create_all."""
     try:
         from flask_migrate import upgrade as db_upgrade
         db_upgrade()
@@ -208,8 +227,8 @@ def _apply_migrations():
 
 
 def init_admin_user(force=False):
-    """
-    Cria o usuário admin automaticamente a partir do .env.
+    """Cria/atualiza o usuário admin a partir do .env.
+
     Com force=True, atualiza a senha mesmo se o usuário já existir.
     """
     from .models import User

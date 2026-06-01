@@ -16,22 +16,20 @@ from .scanner import (
 )
 
 
-
-# ---------------------------------------------------------------------------
-# App cache — create_app() é chamado apenas UMA VEZ por processo worker
-# (via @worker_init signal em __init__.py). O cache evita overhead por task.
-# ---------------------------------------------------------------------------
+# create_app() é caro — cacheamos a instância por processo worker.
 _flask_app = None
 
-# ---------------------------------------------------------------------------
-# worker_process_init — cada processo FILHO, apos o fork
-# Reseta sessao SQLAlchemy herdada do pai (evita ResourceClosedError)
-# ---------------------------------------------------------------------------
+
 try:
     from celery.signals import worker_process_init
 
     @worker_process_init.connect
     def on_worker_process_init(**kwargs):
+        """Reseta a sessão SQLAlchemy herdada do pai após o fork.
+
+        Sem isso o worker filho herda conexões do pool do pai e gera
+        ResourceClosedError esporádicos nas primeiras queries.
+        """
         try:
             from app import db as _db
             _db.engine.dispose()
@@ -44,10 +42,7 @@ except Exception:
 
 
 def _get_app():
-    """
-    Retorna o Flask app cacheado.
-    Se não existir (ex: execução fora do worker), cria um novo.
-    """
+    """Retorna o Flask app cacheado por processo, criando-o se necessário."""
     global _flask_app
     if _flask_app is None:
         from app import create_app
@@ -55,15 +50,11 @@ def _get_app():
     return _flask_app
 
 
-# ---------------------------------------------------------------------------
-# Helpers internos
-# ---------------------------------------------------------------------------
-
 def _open_history(project_id: int, task_id: str, mode: str):
-    """
-    Cria registro de ScanHistory no início do scan.
+    """Cria registro de ScanHistory no início do scan.
+
     Retorna None silenciosamente se a tabela não existir (migrations pendentes).
-    NUNCA lança exceção — o scan deve continuar independentemente.
+    Nunca lança exceção — o scan deve continuar independentemente.
     """
     try:
         h = ScanHistory(project_id=project_id, task_id=task_id,
@@ -78,7 +69,7 @@ def _open_history(project_id: int, task_id: str, mode: str):
 
 
 def _close_history(history, status: str, **metrics):
-    """Fecha o registro de histórico. Ignora silenciosamente se history for None."""
+    """Fecha o registro de histórico com status final e métricas. No-op se history=None."""
     if history is None:
         return
     try:
@@ -94,9 +85,9 @@ def _close_history(history, status: str, **metrics):
 
 
 def _write_ports(domain_obj: Domain, port_string: str):
-    """
-    Salva portas no campo texto (compatibilidade) E na tabela Port (normalizada).
-    Opera somente se domain_obj.id já existir (após flush).
+    """Persiste portas no campo texto + na tabela Port (normalizada).
+
+    Requer domain_obj.id já materializado (chame flush antes).
     """
     if not port_string:
         return
@@ -116,16 +107,12 @@ def _write_ports(domain_obj: Domain, port_string: str):
                 print(f"[PORTS] Falha ao salvar porta {p_num} em {domain_obj.name}: {e}")
 
 
-# ---------------------------------------------------------------------------
-# Task principal
-# ---------------------------------------------------------------------------
-
 @celery.task(bind=True)
 def run_scan_task(self, project_id, mode='full'):
+    """Task principal de scan. Modos: recon | vuln | full | baseline."""
     app = _get_app()
 
     with app.app_context():
-        # Garante sessao limpa antes de qualquer query
         try:
             db.session.remove()
             db.session.close()
@@ -147,9 +134,9 @@ def run_scan_task(self, project_id, mode='full'):
             print(f"[WORKER] Projeto ID {project_id} nao encontrado!")
             return
 
-        # Bloqueia apenas se já existe OUTRO task ID ativo no banco.
+        # Detecção de duplicata: outro task_id ativo no banco para este projeto.
         # current_task_id == self.request.id → esta é a task certa, continua.
-        # current_task_id == None → race condition resolvida (web pré-salva agora).
+        # current_task_id == None → fila passiva, continua.
         if (project.current_task_id
                 and project.current_task_id != self.request.id
                 and project.scan_status in ['Rodando', 'Na fila']):
@@ -158,8 +145,7 @@ def run_scan_task(self, project_id, mode='full'):
 
         history = _open_history(project_id, self.request.id, mode)
 
-        # Inicializa recon_metrics com zeros — será preenchido pela fase recon
-        # se ela rodar. Garante que o vuln scan puro não quebre ao fechar o histórico.
+        # Inicializado com zeros para o caso de vuln-puro (sem fase recon).
         recon_metrics = {
             'new_domains':   0,
             'alive_hosts':   0,
@@ -177,13 +163,10 @@ def run_scan_task(self, project_id, mode='full'):
 
             blacklist = [l.strip() for l in (project.out_of_scope or "").splitlines() if l.strip()]
 
-            # ==============================================================
-            # FASE 1 — RECON
-            # ==============================================================
+            # === FASE 1 — RECON ===
             if mode in ['recon', 'full', 'baseline']:
                 print(f"[WORKER] --- FASE RECON ({mode}) ---")
 
-                # 1. Coleta subdomínios
                 found_subs = []
                 if project.discovery_enabled:
                     target_clean = (project.target_url
@@ -217,7 +200,6 @@ def run_scan_task(self, project_id, mode='full'):
                     db.session.commit()
                     found_subs = [d.name for d in Domain.query.filter_by(project_id=project.id).all()]
 
-                # 2. Filtragem Out-of-Scope
                 found_subs = [
                     sub for sub in found_subs
                     if not any(
@@ -228,7 +210,7 @@ def run_scan_task(self, project_id, mode='full'):
                 ]
                 print(f"[WORKER] Lista final: {len(found_subs)} domínios.")
 
-                # 3. HTTPX — confirma hosts vivos ANTES do Naabu
+                # HTTPX antes do Naabu — só escaneia portas de hosts vivos.
                 if found_subs:
                     project.scan_message = f"2/4 Verificando {len(found_subs)} subdomínios (HTTPX)..."
                     db.session.commit()
@@ -240,7 +222,6 @@ def run_scan_task(self, project_id, mode='full'):
                 else:
                     alive_data = []
 
-                # 4. Naabu — apenas hosts confirmados pelo HTTPX
                 seen_alive = set()
                 alive_hosts_for_naabu = []
                 for item in alive_data:
@@ -264,7 +245,6 @@ def run_scan_task(self, project_id, mode='full'):
                         if os.path.exists(temp_naabu):
                             os.remove(temp_naabu)
 
-                # Mapas de lookup
                 status_map = {}
                 tech_map   = {}
                 ip_map     = {}
@@ -279,12 +259,11 @@ def run_scan_task(self, project_id, mode='full'):
                 domain_map  = {d.name: d for d in Domain.query.filter_by(project_id=project.id).all()}
                 new_count   = 0
                 total_paths = 0
-                new_alive_subs = []  # para notificação real-time
+                new_alive_subs = []
 
                 project.scan_message = "4/4 Processando Alvos (DNS + Fuzzing + SSL)..."
                 db.session.commit()
 
-                # 5. Atualização, DNS, Fuzzing
                 for sub in found_subs:
                     domain_obj = domain_map.get(sub)
                     is_new     = domain_obj is None
@@ -312,13 +291,12 @@ def run_scan_task(self, project_id, mode='full'):
 
                     domain_obj.ip_address = ip_map.get(sub)
 
-                    # Flush para ter domain_obj.id antes de escrever portas
+                    # Flush para ter domain_obj.id antes de gravar portas.
                     if is_new:
                         db.session.add(domain_obj)
                         db.session.flush()
                         new_count += 1
 
-                    # Portas (tabela normalizada + campo texto)
                     port_str = naabu_data.get(sub)
                     if port_str:
                         _write_ports(domain_obj, port_str)
@@ -329,7 +307,6 @@ def run_scan_task(self, project_id, mode='full'):
                         except Exception as e:
                             print(f"[WORKER] DIG falhou em {sub}: {e}")
 
-                    # Fuzzing
                     should_fuzz = (
                         (mode == 'baseline' and project.fuzzing_enabled) or
                         (mode != 'baseline' and (is_new or not project.discovery_enabled))
@@ -367,13 +344,11 @@ def run_scan_task(self, project_id, mode='full'):
                         except Exception as e:
                             print(f"[WORKER] FFuf falhou em {sub}: {e}")
 
-                    # Marca novos subs vivos para notificação
                     if is_new and code in [200, 201, 202, 204, 301, 302, 307, 308, 403]:
                         new_alive_subs.append(sub)
 
                 db.session.commit()
 
-                # Notificação real-time (novos alvos vivos, durante o scan)
                 if new_alive_subs and mode in ['recon', 'full']:
                     try:
                         preview = new_alive_subs[:10]
@@ -393,7 +368,6 @@ def run_scan_task(self, project_id, mode='full'):
                     except Exception as e:
                         print(f"[NOTIFY] Notificação real-time: {e}")
 
-                # Métricas HTTP
                 c_2xx = sum(1 for i in alive_data if 200 <= int(i.get('status') or 0) < 300)
                 c_3xx = sum(1 for i in alive_data if 300 <= int(i.get('status') or 0) < 400)
                 c_4xx = sum(1 for i in alive_data if 400 <= int(i.get('status') or 0) < 500)
@@ -408,7 +382,7 @@ def run_scan_task(self, project_id, mode='full'):
                             {"name": "🆕 Novos DB",        "value": str(new_count),       "inline": True},
                             {"name": "⚡ Vivos",           "value": str(len(alive_data)), "inline": True},
                             {"name": "📂 Paths",           "value": str(total_paths),     "inline": True},
-                            {"name": "---",                "value": "\u200b",             "inline": False},
+                            {"name": "---",                "value": "​",             "inline": False},
                             {"name": "✅ 2xx",             "value": str(c_2xx),           "inline": True},
                             {"name": "➡️ 3xx",             "value": str(c_3xx),           "inline": True},
                             {"name": "🚫 4xx",             "value": str(c_4xx),           "inline": True},
@@ -421,9 +395,7 @@ def run_scan_task(self, project_id, mode='full'):
 
                 total_domains_now = Domain.query.filter_by(project_id=project.id).count()
 
-                # Persiste métricas da fase recon para uso no _close_history final
-                # (necessário para modo 'full' e 'baseline+vuln' onde o histórico
-                # só é fechado ao final do vuln scan)
+                # Em modos 'full'/'baseline+vuln' o histórico só fecha após o vuln scan.
                 recon_metrics = {
                     'new_domains':    new_count,
                     'alive_hosts':    len(alive_data),
@@ -447,9 +419,7 @@ def run_scan_task(self, project_id, mode='full'):
                     dispatch_next_pending()
                     return "Recon OK"
 
-            # ==============================================================
-            # FASE 2 — VULN SCAN
-            # ==============================================================
+            # === FASE 2 — VULN SCAN ===
             run_vuln_phase = (
                 (mode == 'baseline' and project.vuln_scan_enabled) or
                 mode == 'vuln' or
@@ -459,18 +429,17 @@ def run_scan_task(self, project_id, mode='full'):
             if run_vuln_phase:
                 print("[WORKER] --- FASE VULN SCAN ---")
 
-                # Escaneia TODOS os domínios vivos não verificados — independente de quando
-                # foram descobertos. Isso garante que o contador "pendentes" sempre zera
-                # ao final do scan de vulnerabilidades.
+                # Escaneia todos os domínios vivos não verificados, independente
+                # de quando foram descobertos — garante que o contador "pendentes"
+                # zere ao final do scan.
                 targets = Domain.query.filter(
                     Domain.project_id == project.id,
                     Domain.scanned_vulns == False,
-                    Domain.status_code.in_([200, 201, 202, 204, 301, 302, 307, 308]),
+                    Domain.status_code.in_([200, 201, 202, 204, 301, 302, 307, 308, 403]),
                 ).all()
 
                 if not targets:
                     print("[WORKER] Nenhum alvo pendente para Vuln Scan.")
-                    # Marca todos os demais como verificados para zerar o contador
                     Domain.query.filter(
                         Domain.project_id == project.id,
                         Domain.scanned_vulns == False,
@@ -499,7 +468,7 @@ def run_scan_task(self, project_id, mode='full'):
 
                 print(f"[WORKER] Alvos: {len(targets)}")
 
-                target_file = f"targets_proj_{project.id}.txt"
+                target_file = f"targets_proj_{project.id}_{uuid.uuid4().hex}.txt"
                 with open(target_file, "w") as f:
                     for d in targets:
                         f.write(f"https://{d.name}\n")
@@ -521,8 +490,7 @@ def run_scan_task(self, project_id, mode='full'):
                     for d in targets:
                         d.scanned_vulns = True
 
-                    # Marca também domínios não-vivos que nunca serão escaneados
-                    # para zerar completamente o contador "pendentes" do card
+                    # Marca também não-vivos para zerar o contador "pendentes" do card.
                     Domain.query.filter(
                         Domain.project_id == project.id,
                         Domain.scanned_vulns == False,
@@ -595,32 +563,26 @@ def run_scan_task(self, project_id, mode='full'):
                 pass
 
 
-# ---------------------------------------------------------------------------
-# Dispatcher — acorda o próximo projeto pendente quando um slot abre
-# ---------------------------------------------------------------------------
-
 def dispatch_next_pending():
-    """
-    Chamado ao final de cada scan quando um slot abre.
-    Usa um mutex Redis para garantir que apenas UM worker por vez
-    execute o despacho — elimina a race condition entre ForkPoolWorker-1
-    e ForkPoolWorker-2 que terminam simultaneamente.
+    """Acorda o próximo projeto da fila passiva quando um slot abre.
+
+    Usa mutex Redis (compartilhado com routes.py) para garantir que apenas
+    UM processo execute o despacho — elimina race condition entre workers
+    que terminam simultaneamente.
     """
     from celery import uuid as celery_uuid
     import redis as redis_lib
 
     MAX_CONCURRENT = int(os.environ.get('GLOBAL_SCAN_CONCURRENCY', 2))
     LOCK_KEY   = 'dispatch_lock'
-    LOCK_TTL   = 15  # segundos — evita deadlock se o processo morrer
+    LOCK_TTL   = 15
 
-    # ── Tenta adquirir o mutex Redis ────────────────────────────────────────
     try:
         r = redis_lib.Redis(
             host=os.environ.get('REDIS_HOST', 'redis'),
             port=int(os.environ.get('REDIS_PORT', 6379)),
-            db=1  # mesmo db do cache Python
+            db=1
         )
-        # SET NX EX: só seta se a chave não existir (atômico no Redis)
         acquired = r.set(LOCK_KEY, '1', nx=True, ex=LOCK_TTL)
     except Exception as e:
         print(f"[QUEUE] Redis indisponível para mutex: {e} — usando fallback sem lock.")
@@ -632,8 +594,6 @@ def dispatch_next_pending():
         return
 
     try:
-        # ── Seção crítica — somente um worker por vez ───────────────────────
-        # Conta Rodando + Na fila COM task_id (já despachados mas não iniciados)
         ativos = Project.query.filter(
             db.or_(
                 Project.scan_status == 'Rodando',
@@ -650,10 +610,9 @@ def dispatch_next_pending():
             print(f"[QUEUE] {ativos}/{MAX_CONCURRENT} slots ocupados. Aguardando.")
             return
 
-        # Pega os próximos na fila passiva (sem task_id)
         pendentes = Project.query.filter(
             Project.scan_status == 'Na fila',
-            Project.current_task_id == None
+            Project.current_task_id.is_(None)
         ).order_by(Project.id.asc()).limit(slots_livres).all()
 
         if not pendentes:
@@ -661,7 +620,7 @@ def dispatch_next_pending():
             return
 
         for proximo in pendentes:
-            # Recupera o modo salvo no scan_message (ex: "mode:recon")
+            # O modo é preservado em scan_message como "mode:xxx".
             mode = 'full'
             if proximo.scan_message and proximo.scan_message.startswith('mode:'):
                 mode = proximo.scan_message.split(':', 1)[1].strip()
@@ -676,19 +635,19 @@ def dispatch_next_pending():
         db.session.commit()
 
     finally:
-        # ── Libera o mutex sempre, mesmo em caso de exceção ─────────────────
         if r:
             try:
                 r.delete(LOCK_KEY)
             except Exception:
                 pass
 
-# ---------------------------------------------------------------------------
-# process_vulns
-# ---------------------------------------------------------------------------
 
 def process_vulns(vuln_list, project_id):
-    """Mapeia URLs vulneráveis para o Domain ID e persiste as vulnerabilidades."""
+    """Persiste vulnerabilidades mapeando o host de volta para o Domain.
+
+    Dedup é feito por (tool, severity, description) — descrição igual mas
+    ferramentas diferentes são vulnerabilidades distintas.
+    """
     if not vuln_list:
         return
 
@@ -719,7 +678,10 @@ def process_vulns(vuln_list, project_id):
 
         if dom_id:
             exists = Vulnerability.query.filter_by(
-                domain_id=dom_id, description=v['description']
+                domain_id=dom_id,
+                tool=v['tool'],
+                severity=v['severity'],
+                description=v['description'],
             ).first()
             if not exists:
                 db.session.add(Vulnerability(
@@ -734,12 +696,13 @@ def process_vulns(vuln_list, project_id):
     print(f"[WORKER] Salvas: {saved} | Duplicadas: {dupes}")
 
 
-# ---------------------------------------------------------------------------
-# Scan Diário
-# ---------------------------------------------------------------------------
-
 @celery.task
 def run_daily_scan(mode='full'):
+    """Agenda diariamente (Celery Beat) o scan de todos os projetos.
+
+    Idempotente: usa SystemState.last_daily_scan para garantir 1x por dia.
+    Despacha respeitando GLOBAL_SCAN_CONCURRENCY — o resto vai para fila passiva.
+    """
     from .models import SystemState
 
     app = _get_app()
@@ -761,20 +724,40 @@ def run_daily_scan(mode='full'):
 
         from celery import uuid as celery_uuid
 
-        for proj in Project.query.all():
-            if proj.scan_status == 'Rodando':
-                continue
-            if proj.scan_status == 'Na fila' and proj.current_task_id:
-                print(f"[SCHEDULER] Pular {proj.name}: ja na fila.")
-                continue
+        MAX_CONCURRENT = int(os.environ.get('GLOBAL_SCAN_CONCURRENCY', 2))
 
-            # Pré-gera task ID e salva ANTES do dispatch (evita race condition)
+        elegiveis = [
+            p for p in Project.query.order_by(Project.id.asc()).all()
+            if not (p.scan_status == 'Rodando' or
+                    (p.scan_status == 'Na fila' and p.current_task_id))
+        ]
+
+        for proj in elegiveis:
+            proj.scan_status = 'Na fila'
+            proj.scan_message = f'mode:{mode}'
+            proj.current_task_id = None
+        db.session.commit()
+
+        ativos = Project.query.filter(
+            db.or_(
+                Project.scan_status == 'Rodando',
+                db.and_(
+                    Project.scan_status == 'Na fila',
+                    Project.current_task_id.isnot(None),
+                ),
+            )
+        ).count()
+
+        slots = max(0, MAX_CONCURRENT - ativos)
+
+        for proj in elegiveis[:slots]:
             task_id = celery_uuid()
             proj.current_task_id = task_id
-            proj.scan_status = 'Na fila'
-            proj.scan_message = 'Aguardando início (Agendado)...'
+            proj.scan_message = f'Aguardando worker ({mode}, agendado)...'
             db.session.flush()
             run_scan_task.apply_async(args=[proj.id, mode], task_id=task_id)
-            print(f"[SCHEDULER] Agendado {proj.name} - task {task_id}")
+            print(f"[SCHEDULER] Despachado {proj.name} - task {task_id}")
 
         db.session.commit()
+        print(f"[SCHEDULER] {len(elegiveis[:slots])} despachado(s), "
+              f"{max(0, len(elegiveis) - slots)} aguardando slot.")

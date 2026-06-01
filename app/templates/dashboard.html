@@ -49,7 +49,8 @@
         <!-- Global Scan Controls -->
         {% if stats.running > 0 %}
         <form action="{{ url_for('main.stop_global_scan') }}" method="POST" class="d-inline">
-            <button type="submit" 
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit"
                     class="btn btn-danger shadow-sm fw-bold px-3 py-2"
                     onclick="return confirm('Isso vai interromper todos os scans ativos. Continuar?');"
                     aria-label="Parar scan global">
@@ -58,7 +59,8 @@
         </form>
         {% else %}
         <form action="{{ url_for('main.start_global_scan') }}" method="POST" class="d-inline">
-            <button type="submit" 
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit"
                     class="btn btn-success shadow-sm fw-bold px-3 py-2"
                     aria-label="Iniciar scan global">
                 <i class="fas fa-play-circle me-2" aria-hidden="true"></i>Iniciar Scan Global
@@ -141,12 +143,14 @@
             {% set ns.total_pending  = ns.total_pending  + cs.get('pendentes', 0) %}
         {% endfor %}
 
-        {# Projetos com vulns, ordenados desc #}
-        {% set risky = [] %}
+        {# Projetos com vulns, ordenados desc.
+           Usa namespace para evitar o hack frágil de {% set _ = risky.append(...) %}. #}
+        {% set rk = namespace(items=[]) %}
         {% for p in projects %}
             {% set v = cards_stats.get(p.id, {}).get('vulns', 0) %}
-            {% if v > 0 %}{% set _ = risky.append((v, p)) %}{% endif %}
+            {% if v > 0 %}{% set rk.items = rk.items + [(v, p)] %}{% endif %}
         {% endfor %}
+        {% set risky = rk.items %}
 
         {# ── Linha 1: Superfície de Ataque + Segurança ── #}
         <div class="row g-3 mb-3">
@@ -293,7 +297,7 @@
                         </h2>
 
                         {% if risky %}
-                            {% set risky_sorted = risky | sort(attribute=0, reverse=True) %}
+                            {% set risky_sorted = risky | sort(attribute='0', reverse=True) %}
                             <ul class="list-unstyled mb-0">
                             {% for vuln_count, p in risky_sorted[:5] %}
                                 {% set pct = ((vuln_count / stats.vulns) * 100) | round if stats.vulns > 0 else 0 %}
@@ -501,6 +505,7 @@
                  onclick="event.stopPropagation()">
                 <div class="modal-dialog modal-lg">
                     <form method="POST" action="{{ url_for('main.edit_project', id=project.id) }}">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                         <div class="modal-content border-0 shadow-lg text-start">
                             <header class="modal-header bg-primary text-white">
                                 <h2 class="modal-title fw-bold h5" id="editModalLabel{{ project.id }}">
@@ -677,6 +682,7 @@
                         <footer class="modal-footer bg-light">
                             <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
                             <form action="{{ url_for('main.delete_project', id=project.id) }}" method="POST" class="d-inline">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                 <button type="submit" class="btn btn-danger fw-bold">Sim, Apagar Tudo</button>
                             </form>
                         </footer>
@@ -706,6 +712,7 @@
      aria-hidden="true">
     <div class="modal-dialog modal-lg modal-dialog-scrollable">
         <form method="POST" action="{{ url_for('main.add_project') }}" id="newProjectForm">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <div class="modal-content border-0 shadow-lg">
 
                 <header class="modal-header bg-primary text-white">

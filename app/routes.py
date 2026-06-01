@@ -9,6 +9,7 @@ from celery import uuid as celery_uuid
 from .services import (get_user_stats, get_severity_stats,
                         get_project_domain_stats, get_all_projects_card_stats)
 import os
+import re
 import json
 import csv
 import io
@@ -16,22 +17,32 @@ from sqlalchemy import or_, and_, func
 import fnmatch
 from datetime import datetime, timedelta
 
+# Casa o formato aceito por _sanitize_domain no scanner — bloqueia injeção shell.
+_DOMAIN_RE = re.compile(r'^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,62}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,62}[a-zA-Z0-9])?)+$')
+
+
+def _clean_target_url(value: str) -> str:
+    """Extrai hostname puro de uma string. Retorna '' se inválido."""
+    cleaned = (value or '').strip().replace('https://', '').replace('http://', '')
+    cleaned = cleaned.split('/')[0].split(':')[0].lower()
+    return cleaned if _DOMAIN_RE.match(cleaned) else ''
+
+
 main = Blueprint('main', __name__)
 
-# ---------------------------------------------------------------------------
-# AUTENTICAÇÃO
-# ---------------------------------------------------------------------------
 
 @main.route('/', methods=['GET'])
 def index():
+    """Página inicial — redireciona para o dashboard se já logado."""
     if current_user.is_authenticated:
         return redirect(url_for('main.dashboard'))
     return render_template('login.html')
 
 
 @main.route('/login', methods=['POST'])
-@limiter.limit("5 per minute")          # Proteção brute-force: máx 5 tentativas/min por IP
+@limiter.limit("5 per minute")
 def login_post():
+    """Autentica o usuário. Rate-limited a 5 tentativas/min por IP."""
     username = request.form.get('username', '').strip()
     password = request.form.get('password', '')
 
@@ -51,32 +62,21 @@ def login_post():
 @main.route('/logout')
 @login_required
 def logout():
+    """Encerra a sessão do usuário atual."""
     logout_user()
     flash('Você foi desconectado com sucesso.', 'info')
     return redirect(url_for('main.index'))
 
 
-# Endpoint para obter o token CSRF via JavaScript/HTMX
-@main.route('/api/csrf-token')
-@login_required
-def get_csrf_token():
-    from flask_wtf.csrf import generate_csrf
-    return jsonify({'csrf_token': generate_csrf()})
-
-
-# ---------------------------------------------------------------------------
-# DASHBOARD & PROJETOS
-# ---------------------------------------------------------------------------
-
 @main.route('/dashboard')
 @login_required
 def dashboard():
+    """Renderiza o dashboard com estatísticas agregadas do usuário."""
     projects = Project.query.filter_by(user_id=current_user.id).all()
 
     stats    = get_user_stats(current_user.id)
     severity = get_severity_stats(current_user.id)
 
-    # Contadores de cards calculados em 2 queries (sem carregar domínios na memória)
     project_ids  = [p.id for p in projects]
     cards_stats  = get_all_projects_card_stats(project_ids)
 
@@ -101,14 +101,20 @@ def dashboard():
 @main.route('/add_project', methods=['POST'])
 @login_required
 def add_project():
+    """Cria projeto e dispara baseline via fila global."""
     name = request.form.get('name', '').strip()
-    target_url = request.form.get('target_url', '').strip()
+    target_raw = request.form.get('target_url', '').strip()
 
-    in_scope_raw = request.form.get('in_scope', '')[:10000]   # limita tamanho
+    in_scope_raw = request.form.get('in_scope', '')[:10000]
     out_of_scope_raw = request.form.get('out_of_scope', '')[:10000]
 
-    if not name or not target_url:
+    if not name or not target_raw:
         flash('Nome e URL Alvo são obrigatórios!', 'error')
+        return redirect(url_for('main.dashboard'))
+
+    target_clean = _clean_target_url(target_raw)
+    if not target_clean:
+        flash('URL alvo inválida. Use o formato "alvo.com" (sem http:// ou paths).', 'error')
         return redirect(url_for('main.dashboard'))
 
     discovery_enabled = bool(request.form.get('auto_discovery'))
@@ -118,7 +124,7 @@ def add_project():
 
     new_project = Project(
         name=name,
-        target_url=target_url,
+        target_url=target_clean,
         out_of_scope=out_of_scope_raw,
         in_scope=in_scope_raw,
         discovery_enabled=discovery_enabled,
@@ -126,30 +132,24 @@ def add_project():
         user_id=current_user.id,
         vuln_scan_enabled=vuln_scan_enabled,
         vuln_scan_recon_enabled=vuln_scan_recon_enabled,
-        scan_status='Na fila',
+        scan_status='Parado',
         scan_message='Aguardando início...',
     )
     db.session.add(new_project)
-    db.session.flush()  # gera o ID antes de criar domínios
+    db.session.flush()
 
     if in_scope_raw:
         for line in in_scope_raw.splitlines():
-            clean = line.strip().replace('https://', '').replace('http://', '').split('/')[0]
+            clean = _clean_target_url(line)
             if clean and not Domain.query.filter_by(name=clean, project_id=new_project.id).first():
                 db.session.add(Domain(name=clean, project_id=new_project.id))
 
-    target_clean = target_url.replace('https://', '').replace('http://', '').split('/')[0]
     if not Domain.query.filter_by(name=target_clean, project_id=new_project.id).first():
         db.session.add(Domain(name=target_clean, project_id=new_project.id))
 
-    # Pré-gera o task ID e salva no banco ANTES de despachar.
-    # Sem isso há race condition: o worker pode pegar a task antes do commit
-    # do task_id, a verificação de duplicata dispara e a task é descartada.
-    task_id = celery_uuid()
-    new_project.current_task_id = task_id
     db.session.commit()
 
-    run_scan_task.apply_async(args=[new_project.id, 'baseline'], task_id=task_id)
+    _dispatch_or_queue(new_project, 'baseline')
 
     flash(f'Projeto "{name}" criado! Scan adicionado à fila.', 'success')
     return redirect(url_for('main.dashboard'))
@@ -158,6 +158,7 @@ def add_project():
 @main.route('/project/<int:id>')
 @login_required
 def project_details(id):
+    """Página de detalhes de um projeto (lista subdomínios + vulns)."""
     project = Project.query.get_or_404(id)
     if project.user_id != current_user.id:
         abort(403)
@@ -168,7 +169,7 @@ def project_details(id):
         Domain.query
         .filter_by(project_id=id)
         .order_by(Domain.first_seen.desc())
-        .limit(200)           # carrega somente os 200 mais recentes na view inicial
+        .limit(200)
         .all()
     )
 
@@ -180,9 +181,21 @@ def project_details(id):
 
 GLOBAL_SCAN_CONCURRENCY = int(os.environ.get('GLOBAL_SCAN_CONCURRENCY', 2))
 
+# Precisa bater com o filtro de vuln scan em tasks.py.
+SCANNABLE_STATUS_CODES = [200, 201, 202, 204, 301, 302, 307, 308, 403]
+
+
+def _count_pendentes(project_id):
+    """Conta domínios vivos ainda não verificados para vuln scan."""
+    return Domain.query.filter(
+        Domain.project_id == project_id,
+        Domain.scanned_vulns == False,
+        Domain.status_code.in_(SCANNABLE_STATUS_CODES),
+    ).count()
+
 
 def _count_active_scans():
-    """Conta projetos ativos: Rodando + Na fila com task já despachada."""
+    """Conta projetos ativos no sistema inteiro (todos usuários)."""
     return Project.query.filter(
         db.or_(
             Project.scan_status == 'Rodando',
@@ -194,33 +207,82 @@ def _count_active_scans():
     ).count()
 
 
-def _dispatch_or_queue(project, mode):
-    """
-    Despacha a task imediatamente se houver slot disponível,
-    ou apenas enfileira (current_task_id=None) para dispatch_next_pending.
-    """
-    ativos = _count_active_scans()
-    task_id = celery_uuid()
+def _acquire_dispatch_lock(ttl=10, max_wait=5.0):
+    """Adquire o mutex Redis de despacho, esperando até max_wait segundos.
 
-    if ativos < GLOBAL_SCAN_CONCURRENCY:
+    Retorna (acquired, redis_client). Se acquired=False (timeout), o caller
+    DEVE abortar a operação — outro processo está despachando.
+    """
+    try:
+        import redis as redis_lib
+        import time as _time
+        r = redis_lib.Redis(
+            host=os.environ.get('REDIS_HOST', 'redis'),
+            port=int(os.environ.get('REDIS_PORT', 6379)),
+            db=1,
+        )
+        deadline = _time.monotonic() + max_wait
+        while True:
+            if r.set('dispatch_lock', '1', nx=True, ex=ttl):
+                return True, r
+            if _time.monotonic() >= deadline:
+                return False, r
+            _time.sleep(0.1)
+    except Exception as e:
+        print(f"[DISPATCH] Redis indisponível ({e}) — sem mutex.")
+        return True, None
+
+
+def _release_dispatch_lock(r):
+    """Libera o mutex de despacho. No-op se r for None."""
+    if r:
+        try:
+            r.delete('dispatch_lock')
+        except Exception:
+            pass
+
+
+def _dispatch_or_queue(project, mode):
+    """Despacha task se houver slot, ou marca como fila passiva.
+
+    Em fila passiva o projeto fica com current_task_id=None e é acordado
+    por dispatch_next_pending quando outra task termina.
+    """
+    acquired, r = _acquire_dispatch_lock()
+    if not acquired:
+        _release_dispatch_lock(r)
         project.scan_status = 'Na fila'
-        project.scan_message = f'Aguardando worker ({mode})...'
-        project.current_task_id = task_id
+        project.scan_message = f'mode:{mode}'
+        project.current_task_id = None
         db.session.commit()
-        run_scan_task.apply_async(args=[project.id, mode], task_id=task_id)
-        print(f"[DISPATCH] {project.name} despachado imediatamente ({ativos+1}/{GLOBAL_SCAN_CONCURRENCY} ativos)")
-    else:
-        project.scan_status = 'Na fila'
-        project.scan_message = f'Aguardando slot ({ativos}/{GLOBAL_SCAN_CONCURRENCY} em uso)...'
-        project.current_task_id = None   # sem task_id = aguarda dispatch_next_pending
-        db.session.commit()
-        print(f"[DISPATCH] {project.name} enfileirado — slots cheios ({ativos}/{GLOBAL_SCAN_CONCURRENCY})")
+        print(f"[DISPATCH] {project.name} enfileirado (mutex ocupado)")
+        return
+
+    try:
+        ativos = _count_active_scans()
+        task_id = celery_uuid()
+
+        if ativos < GLOBAL_SCAN_CONCURRENCY:
+            project.scan_status = 'Na fila'
+            project.scan_message = f'Aguardando worker ({mode})...'
+            project.current_task_id = task_id
+            db.session.commit()
+            run_scan_task.apply_async(args=[project.id, mode], task_id=task_id)
+            print(f"[DISPATCH] {project.name} despachado ({ativos+1}/{GLOBAL_SCAN_CONCURRENCY})")
+        else:
+            project.scan_status = 'Na fila'
+            project.scan_message = f'mode:{mode}'
+            project.current_task_id = None
+            db.session.commit()
+            print(f"[DISPATCH] {project.name} enfileirado — slots cheios ({ativos}/{GLOBAL_SCAN_CONCURRENCY})")
+    finally:
+        _release_dispatch_lock(r)
 
 
 @main.route('/project/<int:id>/scan_card/<mode>', methods=['POST'])
 @login_required
 def start_scan_from_card(id, mode):
-    """Inicia scan e retorna o card atualizado (usado nos botões rápidos do dashboard)."""
+    """Inicia scan e retorna o card atualizado (botões rápidos do dashboard)."""
     project = Project.query.get_or_404(id)
     if project.user_id != current_user.id:
         abort(403)
@@ -245,6 +307,7 @@ def start_scan_from_card(id, mode):
 @main.route('/project/<int:id>/scan/<mode>', methods=['POST'])
 @login_required
 def start_scan(id, mode):
+    """Inicia scan e retorna o partial de controles."""
     project = Project.query.get_or_404(id)
     if project.user_id != current_user.id:
         abort(403)
@@ -253,29 +316,24 @@ def start_scan(id, mode):
         return "Modo inválido", 400
 
     if project.scan_status in ['Rodando', 'Na fila']:
-        pendentes = Domain.query.filter(
-            Domain.project_id == id,
-            Domain.scanned_vulns == False,
-            Domain.status_code.in_([200, 201, 202, 204, 301, 302, 307, 308])
-        ).count()
+        pendentes = _count_pendentes(id)
         return render_template('partials/controls.html', project=project, pendentes=pendentes)
 
     _dispatch_or_queue(project, mode)
 
-    pendentes = Domain.query.filter(
-        Domain.project_id == project.id,
-        Domain.scanned_vulns == False,
-        Domain.status_code.in_([200, 201, 202, 204, 301, 302, 307, 308])
-    ).count()
+    pendentes = _count_pendentes(project.id)
     return render_template('partials/controls.html', project=project, pendentes=pendentes)
 
 
 @main.route('/project/<int:id>/stop', methods=['POST'])
 @login_required
 def stop_scan(id):
+    """Interrompe scan ativo (Rodando ou Na fila) e libera o slot."""
     project = Project.query.get_or_404(id)
     if project.user_id != current_user.id:
         abort(403)
+
+    was_active = project.scan_status in ['Rodando', 'Na fila']
 
     if project.current_task_id:
         try:
@@ -283,7 +341,7 @@ def stop_scan(id):
         except Exception:
             pass
 
-        # Marca o histórico em andamento como stopped
+    if was_active:
         history = ScanHistory.query.filter_by(
             project_id=id, status='running'
         ).order_by(ScanHistory.started_at.desc()).first()
@@ -296,35 +354,43 @@ def stop_scan(id):
         project.current_task_id = None
         db.session.commit()
 
-        flash('O comando de parada forçada foi enviado.', 'warning')
+        try:
+            from .tasks import dispatch_next_pending
+            dispatch_next_pending()
+        except Exception as e:
+            print(f"[STOP] dispatch_next_pending falhou: {e}")
 
-    pendentes = Domain.query.filter(
-        Domain.project_id == project.id,
-        Domain.scanned_vulns == False,
-        Domain.status_code.in_([200, 201, 202, 204, 301, 302, 307, 308])
-    ).count()
+        flash('Scan interrompido.', 'warning')
+
+    pendentes = _count_pendentes(project.id)
     return render_template('partials/controls.html', project=project, pendentes=pendentes)
 
 
 @main.route('/project/<int:id>/edit', methods=['POST'])
 @login_required
 def edit_project(id):
+    """Atualiza configuração do projeto e ajusta o escopo (in/out)."""
     project = Project.query.get_or_404(id)
     if project.user_id != current_user.id:
         abort(403)
 
     name = request.form.get('name', '').strip()
-    target_url = request.form.get('target_url', '').strip()
+    target_raw = request.form.get('target_url', '').strip()
 
     in_scope_raw = request.form.get('in_scope', '')[:10000]
     out_of_scope_raw = request.form.get('out_of_scope', '')[:10000]
 
-    if not name or not target_url:
+    if not name or not target_raw:
         flash('Nome e URL Alvo não podem ficar vazios.', 'error')
         return redirect(request.referrer or url_for('main.dashboard'))
 
+    target_clean = _clean_target_url(target_raw)
+    if not target_clean:
+        flash('URL alvo inválida. Use o formato "alvo.com".', 'error')
+        return redirect(request.referrer or url_for('main.dashboard'))
+
     project.name = name
-    project.target_url = target_url
+    project.target_url = target_clean
     project.in_scope = in_scope_raw
     project.out_of_scope = out_of_scope_raw
     project.discovery_enabled = bool(request.form.get('auto_discovery'))
@@ -335,12 +401,11 @@ def edit_project(id):
     added_count = 0
     if in_scope_raw:
         for line in in_scope_raw.splitlines():
-            clean = line.strip().replace('https://', '').replace('http://', '').split('/')[0]
+            clean = _clean_target_url(line)
             if clean and not Domain.query.filter_by(name=clean, project_id=id).first():
                 db.session.add(Domain(name=clean, project_id=id))
                 added_count += 1
 
-    target_clean = target_url.replace('https://', '').replace('http://', '').split('/')[0]
     if not Domain.query.filter_by(name=target_clean, project_id=id).first():
         db.session.add(Domain(name=target_clean, project_id=id))
 
@@ -367,9 +432,11 @@ def edit_project(id):
 @main.route('/project/<int:id>/delete', methods=['POST'])
 @login_required
 def delete_project(id):
+    """Exclui projeto e libera slot se havia scan ativo."""
     project = Project.query.get_or_404(id)
     if project.user_id != current_user.id:
         abort(403)
+    was_active = project.scan_status in ['Rodando', 'Na fila']
     if project.current_task_id:
         try:
             celery.control.revoke(project.current_task_id, terminate=True)
@@ -377,18 +444,22 @@ def delete_project(id):
             pass
     db.session.delete(project)
     db.session.commit()
+
+    if was_active:
+        try:
+            from .tasks import dispatch_next_pending
+            dispatch_next_pending()
+        except Exception as e:
+            print(f"[DELETE] dispatch_next_pending falhou: {e}")
+
     flash(f'Projeto "{project.name}" foi apagado.', 'success')
     return redirect(url_for('main.dashboard'))
 
 
-# ---------------------------------------------------------------------------
-# EXPORTAÇÃO
-# ---------------------------------------------------------------------------
-
 @main.route('/project/<int:id>/export/<fmt>')
 @login_required
 def export_project(id, fmt):
-    """Exporta todos os domínios + vulnerabilidades em JSON ou CSV."""
+    """Exporta domínios + vulnerabilidades em JSON ou CSV."""
     project = Project.query.get_or_404(id)
     if project.user_id != current_user.id:
         abort(403)
@@ -427,7 +498,6 @@ def export_project(id, fmt):
         resp.headers['Content-Disposition'] = f'attachment; filename="{safe_name}_export.json"'
         return resp
 
-    # CSV
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow([
@@ -455,10 +525,6 @@ def export_project(id, fmt):
     resp.headers['Content-Disposition'] = f'attachment; filename="{safe_name}_export.csv"'
     return resp
 
-
-# ---------------------------------------------------------------------------
-# HISTÓRICO DE SCANS
-# ---------------------------------------------------------------------------
 
 @main.route('/api/project/<int:id>/history')
 @login_required
@@ -492,16 +558,16 @@ def project_scan_history(id):
     } for h in histories])
 
 
-# ---------------------------------------------------------------------------
-# AUTO-HEALING & HTMX PARTIALS
-# ---------------------------------------------------------------------------
-
 @main.route('/api/heal_projects')
 @login_required
 def heal_projects_api():
+    """Detecta scans órfãos (sem worker correspondente) e marca como Erro.
+
+    Retorna um fragmento HTML para o badge de status no header.
+    """
     running_projects = Project.query.filter(
         Project.scan_status == 'Rodando',
-        Project.user_id == current_user.id   # corrigido: filtro por usuário
+        Project.user_id == current_user.id
     ).all()
 
     if not running_projects:
@@ -512,7 +578,8 @@ def heal_projects_api():
 
     changes = 0
     try:
-        inspector = celery.control.inspect(timeout=1.0)
+        # 1s frequentemente perde a resposta do worker; 3s é estável.
+        inspector = celery.control.inspect(timeout=3.0)
         active = inspector.active()
 
         if active is None:
@@ -522,35 +589,42 @@ def heal_projects_api():
             '''
 
         real_task_ids = set()
-        for w_tasks in [active, inspector.reserved()]:
+        for w_tasks in [active, inspector.reserved(), inspector.scheduled()]:
             if w_tasks:
                 for _, tasks_list in w_tasks.items():
                     for t in tasks_list:
-                        real_task_ids.add(t['id'])
+                        tid = t.get('id') or (t.get('request') or {}).get('id')
+                        if tid:
+                            real_task_ids.add(tid)
+
+        # Período de graça: evita marcar como perdido enquanto o worker
+        # ainda está pegando a task da fila.
+        grace_cutoff = datetime.utcnow() - timedelta(seconds=30)
 
         for p in running_projects:
-            if not p.current_task_id or p.current_task_id not in real_task_ids:
-                # Marca histórico em andamento como erro
-                h = ScanHistory.query.filter_by(
-                    project_id=p.id, status='running'
-                ).order_by(ScanHistory.started_at.desc()).first()
-                if h:
-                    h.status = 'error'
-                    h.finished_at = datetime.utcnow()
+            if p.current_task_id and p.current_task_id in real_task_ids:
+                continue
+            if p.last_scan_date and p.last_scan_date > grace_cutoff:
+                continue
 
-                p.scan_status = 'Erro'
-                p.scan_message = ' Processo perdido'
-                p.current_task_id = None
-                changes += 1
+            h = ScanHistory.query.filter_by(
+                project_id=p.id, status='running'
+            ).order_by(ScanHistory.started_at.desc()).first()
+            if h:
+                h.status = 'error'
+                h.finished_at = datetime.utcnow()
+
+            p.scan_status = 'Erro'
+            p.scan_message = ' Processo perdido'
+            p.current_task_id = None
+            changes += 1
 
         if changes > 0:
             db.session.commit()
-            resp = make_response('''
+            return '''
                 <i class="fas fa-band-aid text-warning me-2"></i>
                 <span>Auto-Healing Ativo</span>
-            ''')
-            resp.headers['HX-Trigger'] = 'refreshProjects'
-            return resp
+            '''
 
     except Exception as e:
         print(f"[AUTO-HEAL ERROR] {e}")
@@ -565,24 +639,10 @@ def heal_projects_api():
     '''
 
 
-@main.route('/dashboard')
-@login_required
-def dashboard_redirect():
-    return redirect(url_for('main.dashboard'))
-
-
-# Quantos projetos podem rodar em paralelo no scan global
 @main.route('/scan/global/start', methods=['POST'])
 @login_required
 def start_global_scan():
-    """
-    Dispara scans respeitando o limite de GLOBAL_SCAN_CONCURRENCY projetos simultâneos.
-    - Marca todos os elegíveis como 'Pendente (fila)' no banco
-    - Despacha imediatamente apenas os primeiros N (concurrency)
-    - Cada task, ao terminar, acorda o próximo projeto pendente automaticamente
-    """
-    from .tasks import dispatch_next_pending
-
+    """Inicia scan 'full' em todos os projetos elegíveis, respeitando o cap global."""
     projects = Project.query.filter(
         Project.user_id == current_user.id,
         Project.scan_status.notin_(['Rodando', 'Na fila'])
@@ -592,38 +652,33 @@ def start_global_scan():
         flash('Nenhum projeto elegível para scan.', 'info')
         return redirect(url_for('main.dashboard'))
 
-    # Marca todos como pendentes SEM task_id (fila passiva)
-    for p in projects:
-        p.scan_status = 'Na fila'
-        p.scan_message = 'mode:full'   # preserva o modo para dispatch_next_pending
-        p.current_task_id = None
+    acquired, r = _acquire_dispatch_lock(ttl=15)
+    if not acquired:
+        _release_dispatch_lock(r)
+        flash('Outro despacho em andamento. Tente novamente em alguns segundos.', 'warning')
+        return redirect(url_for('main.dashboard'))
 
-    db.session.commit()
-
-    # Conta slots realmente disponíveis (desconta Rodando + Na fila já despachados)
-    ativos = Project.query.filter(
-        db.or_(
-            Project.scan_status == 'Rodando',
-            db.and_(
-                Project.scan_status == 'Na fila',
-                Project.current_task_id != None
-            )
-        )
-    ).count()
-
-    slots = max(0, GLOBAL_SCAN_CONCURRENCY - ativos)
-
-    # Despacha apenas os slots disponíveis
     dispatched = 0
-    for p in projects[:slots]:
-        task_id = celery_uuid()
-        p.current_task_id = task_id
-        p.scan_message = 'Aguardando worker (full)...'
-        db.session.flush()
-        run_scan_task.apply_async(args=[p.id, 'full'], task_id=task_id)
-        dispatched += 1
+    try:
+        ativos = _count_active_scans()
+        slots = max(0, GLOBAL_SCAN_CONCURRENCY - ativos)
 
-    db.session.commit()
+        for p in projects[:slots]:
+            task_id = celery_uuid()
+            p.scan_status = 'Na fila'
+            p.scan_message = 'Aguardando worker (full)...'
+            p.current_task_id = task_id
+            run_scan_task.apply_async(args=[p.id, 'full'], task_id=task_id)
+            dispatched += 1
+
+        for p in projects[slots:]:
+            p.scan_status = 'Na fila'
+            p.scan_message = 'mode:full'
+            p.current_task_id = None
+
+        db.session.commit()
+    finally:
+        _release_dispatch_lock(r)
 
     total = len(projects)
     waiting = total - dispatched
@@ -633,14 +688,11 @@ def start_global_scan():
     flash(msg, 'success')
     return redirect(url_for('main.dashboard'))
 
+
 @main.route('/scan/global/stop', methods=['POST'])
 @login_required
 def stop_global_scan():
-    try:
-        celery.control.purge()
-    except Exception as e:
-        print(f"[STOP GLOBAL] Erro ao limpar fila: {e}")
-
+    """Interrompe todos os scans do usuário (revoga task a task — não usa purge global)."""
     projects = Project.query.filter(
         Project.user_id == current_user.id,
         Project.scan_status.in_(['Rodando', 'Na fila'])
@@ -667,18 +719,22 @@ def stop_global_scan():
         stopped += 1
 
     db.session.commit()
+
+    if stopped > 0:
+        try:
+            from .tasks import dispatch_next_pending
+            dispatch_next_pending()
+        except Exception as e:
+            print(f"[STOP GLOBAL] dispatch_next_pending falhou: {e}")
+
     flash(f'{stopped} scans interrompidos.' if stopped > 0 else 'Nenhum scan estava rodando.', 'warning' if stopped else 'info')
     return redirect(url_for('main.dashboard'))
 
 
-# ---------------------------------------------------------------------------
-# HTMX PARTIALS
-# ---------------------------------------------------------------------------
-
 @main.route('/htmx/stats')
 @login_required
 def htmx_stats():
-    """Atualiza os cards de estatísticas via HTMX (usa serviço centralizado)."""
+    """Atualiza os cards de estatísticas via HTMX."""
     stats = get_user_stats(current_user.id)
     return render_template('partials/dashboard_status.html', stats=stats)
 
@@ -686,6 +742,7 @@ def htmx_stats():
 @main.route('/project/<int:id>/status_part')
 @login_required
 def project_status_part(id):
+    """Partial HTMX: card de status do scan."""
     project = Project.query.get_or_404(id)
     if project.user_id != current_user.id:
         abort(403)
@@ -695,25 +752,22 @@ def project_status_part(id):
 @main.route('/project/<int:id>/controls_part')
 @login_required
 def project_controls_part(id):
+    """Partial HTMX: botões de controle de scan."""
     project = Project.query.get_or_404(id)
     if project.user_id != current_user.id:
         abort(403)
-    # Conta pendentes via SQL — sem carregar project.domains na memória
-    pendentes = Domain.query.filter(
-        Domain.project_id == id,
-        Domain.scanned_vulns == False,
-        Domain.status_code.in_([200, 201, 202, 204, 301, 302, 307, 308])
-    ).count()
+    pendentes = _count_pendentes(id)
     return render_template('partials/controls.html', project=project, pendentes=pendentes)
 
 
 @main.route('/project/<int:id>/vulns_part')
 @login_required
 def project_vulns_part(id):
+    """Partial HTMX: lista de vulnerabilidades ordenadas por severidade."""
     project = Project.query.get_or_404(id)
     if project.user_id != current_user.id:
         abort(403)
-    # Query direta — sem carregar project.domains nem suas relações (evita N+1)
+    # Query direta evita N+1 ao não materializar project.domains.
     vulns = (
         db.session.query(Vulnerability, Domain.name.label('domain_name'))
         .join(Domain, Vulnerability.domain_id == Domain.id)
@@ -736,11 +790,11 @@ def project_vulns_part(id):
 @main.route('/project/<int:id>/card_part')
 @login_required
 def project_card_part(id):
+    """Partial HTMX: card do projeto no dashboard."""
     db.session.expire_all()
     project = Project.query.get_or_404(id)
     if project.user_id != current_user.id:
         abort(403)
-    # Calcula stats via SQL (não carrega todos os domínios)
     card_stats = get_all_projects_card_stats([id]).get(id, {})
     return render_template('partials/dashboard_card.html',
                            project=project, card_stats=card_stats,
@@ -750,6 +804,7 @@ def project_card_part(id):
 @main.route('/project/<int:id>/count_domains')
 @login_required
 def count_domains(id):
+    """Retorna a contagem total de domínios do projeto."""
     project = Project.query.get_or_404(id)
     if project.user_id != current_user.id:
         abort(403)
@@ -760,6 +815,7 @@ def count_domains(id):
 @main.route('/project/<int:id>/count_vulns')
 @login_required
 def count_vulns(id):
+    """Retorna a contagem total de vulnerabilidades do projeto."""
     project = Project.query.get_or_404(id)
     if project.user_id != current_user.id:
         abort(403)
@@ -767,11 +823,12 @@ def count_vulns(id):
     return str(total)
 
 
-# ---------------------------------------------------------------------------
-# DOMAINS PART (com paginação)
-# ---------------------------------------------------------------------------
-
 def parse_discord_search(query_str):
+    """Faz parse de query estilo Discord ('status:200 tech:nginx,apache').
+
+    Retorna dict com chaves: status, portas, tech, path, sub, date, ssl, general.
+    Valores comuns ficam em lista; status/sub são flat; date/ssl pegam o último.
+    """
     filters = {
         'status': [],
         'portas': [],
@@ -786,6 +843,7 @@ def parse_discord_search(query_str):
     if not query_str:
         return filters
 
+    # Preserva 'YYYY-MM-DD to YYYY-MM-DD' antes do split por espaço.
     safe_query = query_str.replace(" to ", "__TO__").replace(" até ", "__TO__")
     parts = safe_query.split(' ')
 
@@ -830,6 +888,7 @@ def parse_discord_search(query_str):
 @main.route('/project/<int:id>/domains_part')
 @login_required
 def project_domains_part(id):
+    """Partial HTMX: tabela de domínios com filtros, ordenação e paginação."""
     project = Project.query.get_or_404(id)
     if project.user_id != current_user.id:
         abort(403)
@@ -838,8 +897,8 @@ def project_domains_part(id):
     status_filter = request.args.get('status')
     page     = request.args.get('page', 1, type=int)
     per_page = min(request.args.get('per_page', 200, type=int), 500)
-    sort_by  = request.args.get('sort', 'first_seen')   # first_seen | status | ports | name
-    sort_dir = request.args.get('dir', 'desc')           # asc | desc
+    sort_by  = request.args.get('sort', 'first_seen')
+    sort_dir = request.args.get('dir', 'desc')
 
     query = Domain.query.filter_by(project_id=project.id)
 
@@ -912,11 +971,10 @@ def project_domains_part(id):
         elif status_filter == 'error':
             query = query.filter(Domain.status_code >= 400)
         elif status_filter == 'dead':
-            query = query.filter((Domain.status_code == 0) | (Domain.status_code == None))
+            query = query.filter(or_(Domain.status_code == 0, Domain.status_code.is_(None)))
         elif status_filter.isdigit():
             query = query.filter_by(status_code=int(status_filter))
 
-    # Ordenação dinâmica
     _sort_col = {
         'status':     Domain.status_code,
         'ports':      Domain.open_ports,
@@ -944,12 +1002,10 @@ def project_domains_part(id):
                            sort_dir=sort_dir)
 
 
-
-
 @main.route('/project/<int:id>/mark_scanned', methods=['POST'])
 @login_required
 def mark_all_scanned(id):
-    """Marca todos os domínios do projeto como verificados — limpa o alerta de pendentes."""
+    """Marca todos os domínios do projeto como verificados (limpa pendentes)."""
     project = Project.query.get_or_404(id)
     if project.user_id != current_user.id:
         abort(403)
@@ -963,9 +1019,11 @@ def mark_all_scanned(id):
     flash(f'{updated} domínio(s) marcado(s) como verificados.', 'success')
     return redirect(request.referrer or url_for('main.dashboard'))
 
+
 @main.route('/api/project/<int:id>/search_options')
 @login_required
 def project_search_options(id):
+    """Retorna valores únicos por categoria para autocomplete da busca."""
     project = Project.query.get_or_404(id)
     if project.user_id != current_user.id:
         abort(403)

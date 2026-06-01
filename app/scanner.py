@@ -9,15 +9,12 @@ from datetime import datetime
 import requests
 
 
-# ---------------------------------------------------------------------------
-# Sanitização de Input
-# ---------------------------------------------------------------------------
-
 _SAFE_DOMAIN_RE = re.compile(r'^[a-zA-Z0-9.\-]+$')
 _SAFE_SCHEME_RE = re.compile(r'^https?://')
 
 
 def _sanitize_domain(value: str) -> str:
+    """Extrai e valida hostname. Lança ValueError se contiver caracteres perigosos."""
     clean = value.strip().replace('https://', '').replace('http://', '').split('/')[0].split(':')[0]
     if not _SAFE_DOMAIN_RE.match(clean):
         raise ValueError(f"[SECURITY] Domínio com caracteres inválidos bloqueado: {value!r}")
@@ -25,6 +22,7 @@ def _sanitize_domain(value: str) -> str:
 
 
 def _sanitize_url(value: str) -> str:
+    """Valida URL completa (http/https) e retorna inalterada. Lança ValueError se inválida."""
     value = value.strip()
     if not _SAFE_SCHEME_RE.match(value):
         raise ValueError(f"[SECURITY] URL com esquema inválido bloqueada: {value!r}")
@@ -35,17 +33,13 @@ def _sanitize_url(value: str) -> str:
     return value
 
 
-# ---------------------------------------------------------------------------
-# Redis — cache para chamadas externas lentas
-# ---------------------------------------------------------------------------
-
 _redis_client = None
 
 
 def _get_redis():
-    """
-    Retorna conexão Redis para cache (db=1, separado do Celery que usa db=0).
-    Falha silenciosamente se Redis não estiver disponível.
+    """Retorna conexão Redis (db=1) para cache, ou None se indisponível.
+
+    Cliente é cacheado por processo. Db 0 é o broker Celery.
     """
     global _redis_client
     if _redis_client is None:
@@ -63,18 +57,12 @@ def _get_redis():
     return _redis_client
 
 
-# ---------------------------------------------------------------------------
-# Execução de comandos externos
-# ---------------------------------------------------------------------------
-
 def run_command(command, timeout=None):
-    """
-    Executa um comando shell e retorna linhas de stdout.
+    """Executa comando shell e retorna linhas de stdout.
 
-    Nota: shell=True é mantido intencionalmente porque muitos comandos
-    do pipeline usam operadores de shell (pipes |, redirecionamentos >>).
-    Todos os inputs passam por _sanitize_domain / _sanitize_url antes
-    de chegarem aqui.
+    shell=True é mantido porque os comandos usam pipes/redirects.
+    O input passa por _sanitize_domain/_sanitize_url antes — não aceitar
+    aqui input não-sanitizado.
     """
     try:
         print(f"[CMD] {command}")
@@ -93,11 +81,8 @@ def run_command(command, timeout=None):
         return []
 
 
-# ---------------------------------------------------------------------------
-# Recon — Subdomínios
-# ---------------------------------------------------------------------------
-
 def find_subdomains(target_domain):
+    """Coleta subdomínios via Subfinder + Amass (passivo). Retorna lista deduplicada."""
     target_domain = _sanitize_domain(target_domain)
     print(f"[SCANNER] Recon Híbrido (Subfinder + Amass) para {target_domain}")
 
@@ -125,7 +110,9 @@ def find_subdomains(target_domain):
                     if cl.isdigit(): continue
                     if '.' not in cl: continue
                     if ':' in cl: continue
-                    if not cl.endswith(target_domain): continue
+                    # Match estrito evita falso positivo tipo 'evilalvo.com' para 'alvo.com'.
+                    if cl != target_domain and not cl.endswith('.' + target_domain):
+                        continue
                     subs_set.add(cl)
 
     except Exception as e:
@@ -144,6 +131,7 @@ def find_subdomains(target_domain):
 
 
 def check_alive(subdomains_list):
+    """Verifica quais subdomínios respondem via httpx. Retorna lista de dicts com url/status/tech/ip."""
     if not subdomains_list:
         return []
 
@@ -182,11 +170,8 @@ def check_alive(subdomains_list):
     return parsed
 
 
-# ---------------------------------------------------------------------------
-# Nuclei
-# ---------------------------------------------------------------------------
-
 def scan_nuclei_bulk(targets_file):
+    """Roda Nuclei em lote e retorna lista de findings normalizados."""
     print(f"[SCANNER] Nuclei em lote: {targets_file}")
     output = f"nuclei_res_{uuid.uuid4().hex}.json"
 
@@ -216,21 +201,14 @@ def scan_nuclei_bulk(targets_file):
                         matched_at  = data.get('matched-at', '')
                         extracted   = data.get('extracted-results', [])
 
-                        # Nome: prefere info.name, cai no template-id como fallback
                         name = info.get('name') or template_id or 'Nuclei Finding'
 
-                        # Descarta findings sem URL e sem dados extraídos —
-                        # não têm informação suficiente para ser acionáveis
+                        # Findings sem URL e sem extracted são ruído inacionável.
                         if not matched_at and not extracted:
                             print(f"[SCANNER] Nuclei: descartado finding sem URL — template: {template_id}")
                             continue
 
-                        # Monta descrição com todos os campos disponíveis
-                        # O nome legível é sempre a primeira parte — garante que
-                        # fique visível mesmo quando outros campos estão ausentes
                         parts = []
-
-                        # Nome legível do template (ex: "SSL DNS Names")
                         parts.append(f"Nome: {name}")
 
                         if matcher:
@@ -245,7 +223,6 @@ def scan_nuclei_bulk(targets_file):
                         if extracted:
                             parts.append(f"Extraído: {', '.join(str(x) for x in extracted[:5])}")
 
-                        # Descrição do template (ex: "SSL certificate uses weak cipher")
                         template_desc = info.get('description', '')
                         if template_desc and len(parts) < 5:
                             parts.append(f"Detalhe: {template_desc[:200]}")
@@ -275,11 +252,8 @@ def scan_nuclei_bulk(targets_file):
     return vulns
 
 
-# ---------------------------------------------------------------------------
-# XSS Pipeline: Katana + GAU → Dalfox
-# ---------------------------------------------------------------------------
-
 def scan_crawling_xss_bulk(targets_file):
+    """Pipeline Katana + GAU → Dalfox. Retorna lista de XSS encontrados."""
     print(f"[SCANNER] Katana + GAU → Dalfox: {targets_file}")
     temp_urls = f"crawl_urls_{uuid.uuid4().hex}.txt"
     output_xss = f"xss_{uuid.uuid4().hex}.json"
@@ -345,11 +319,8 @@ def scan_crawling_xss_bulk(targets_file):
     return vulns
 
 
-# ---------------------------------------------------------------------------
-# SQLMap Pipeline
-# ---------------------------------------------------------------------------
-
 def scan_sqlmap_bulk(targets_file):
+    """Pipeline Katana (qurl) → SQLMap. Retorna SQLi confirmados."""
     print(f"[SCANNER] Katana → SQLMap: {targets_file}")
     params_file  = f"sql_params_{uuid.uuid4().hex}.txt"
     results_csv  = f"sqlmap_res_{uuid.uuid4().hex}.csv"
@@ -405,6 +376,7 @@ def scan_sqlmap_bulk(targets_file):
 
 
 def parse_dalfox_json(data):
+    """Converte uma entrada JSON do Dalfox para o formato interno de vuln."""
     host    = data.get('url') or data.get('target') or data.get('poc') or ""
     payload = data.get('payload') or "Payload genérico"
     param   = data.get('param') or "Parâmetro desconhecido"
@@ -420,22 +392,17 @@ def parse_dalfox_json(data):
     }
 
 
-# ---------------------------------------------------------------------------
-# Naabu — Port Scan com Chunking
-# ---------------------------------------------------------------------------
-
 NAABU_CHUNK_SIZE    = int(os.environ.get('NAABU_CHUNK_SIZE', 500))
 NAABU_CHUNK_TIMEOUT = int(os.environ.get('NAABU_CHUNK_TIMEOUT', 600))
 NAABU_RATE          = int(os.environ.get('NAABU_RATE', 1000))
 
 
 def scan_naabu_bulk(targets_file, chunk_size=None, chunk_timeout=None, rate=None):
-    """
-    Roda Naabu em lotes (chunks) para evitar timeout em projetos com 8000+ hosts.
+    """Roda Naabu em lotes para evitar timeout em projetos com 8000+ hosts.
 
-    Configuração via .env:
+    Configuração via env:
       NAABU_CHUNK_SIZE    (padrão 500)  — hosts por lote
-      NAABU_CHUNK_TIMEOUT (padrão 600)  — segundos de timeout por lote
+      NAABU_CHUNK_TIMEOUT (padrão 600)  — timeout por lote (segundos)
       NAABU_RATE          (padrão 1000) — pacotes/s
     """
     chunk_size    = chunk_size    or NAABU_CHUNK_SIZE
@@ -501,11 +468,8 @@ def scan_naabu_bulk(targets_file, chunk_size=None, chunk_timeout=None, rate=None
     return final_map
 
 
-# ---------------------------------------------------------------------------
-# DNS
-# ---------------------------------------------------------------------------
-
 def run_dig_info(domain):
+    """Coleta info de DNS (CNAME, MX) via dig. Retorna string formatada ou None."""
     try:
         domain = _sanitize_domain(domain)
     except ValueError as e:
@@ -531,11 +495,8 @@ def run_dig_info(domain):
     return " | ".join(info) if info else None
 
 
-# ---------------------------------------------------------------------------
-# Discord
-# ---------------------------------------------------------------------------
-
 def send_discord_embed(title, description, fields, color_hex):
+    """Envia notificação para o webhook do Discord. No-op se DISCORD_WEBHOOK_URL ausente."""
     webhook_url = os.environ.get('DISCORD_WEBHOOK_URL')
     if not webhook_url:
         print("[NOTIFY] DISCORD_WEBHOOK_URL não configurada.")
@@ -565,11 +526,8 @@ def send_discord_embed(title, description, fields, color_hex):
         print(f"[NOTIFY] Falha no Discord: {e}")
 
 
-# ---------------------------------------------------------------------------
-# GAU, CMSeeK, FFuf
-# ---------------------------------------------------------------------------
-
 def scan_gau(target_domain):
+    """Coleta URLs históricas via GAU (Get All URLs)."""
     print(f"[SCANNER] GAU em {target_domain}...")
     output = f"gau_{uuid.uuid4().hex}.txt"
     run_command(
@@ -593,6 +551,7 @@ def scan_gau(target_domain):
 
 
 def scan_cmseek(target_url):
+    """Detecta CMS via CMSeeK. Retorna 'CMS versao' ou None."""
     try:
         target_url = _sanitize_url(target_url)
     except ValueError as e:
@@ -625,28 +584,18 @@ def scan_cmseek(target_url):
     return None
 
 
-# Tempo máximo por scan FFuf — configurável via .env
-FFUF_MAXTIME = int(os.environ.get('FFUF_MAXTIME', 90))   # segundos por host
+FFUF_MAXTIME = int(os.environ.get('FFUF_MAXTIME', 90))
 
-# ---------------------------------------------------------------------------
-# Configurações das ferramentas — todas via .env
-# ---------------------------------------------------------------------------
-
-# Subfinder
 SUBFINDER_THREADS  = int(os.environ.get('SUBFINDER_THREADS', 100))
 
-# Amass
 AMASS_TIMEOUT      = int(os.environ.get('AMASS_TIMEOUT', 29))
 
-# HTTPX
 HTTPX_THREADS      = int(os.environ.get('HTTPX_THREADS', 50))
 
-# Naabu (chunk já vem do env via NAABU_CHUNK_SIZE/TIMEOUT/RATE)
 NAABU_TOP_PORTS    = int(os.environ.get('NAABU_TOP_PORTS', 100))
 NAABU_RETRIES      = int(os.environ.get('NAABU_RETRIES', 1))
 NAABU_PKT_TIMEOUT  = int(os.environ.get('NAABU_PKT_TIMEOUT', 5))
 
-# Nuclei
 NUCLEI_TAGS        = os.environ.get(
     'NUCLEI_TAGS',
     'cve,misconfig,exposure,tech,panel,xss,sqli,lfi,ssrf,rce,oast,takeover,default-login,fuzzing'
@@ -656,28 +605,22 @@ NUCLEI_CONCURRENCY = int(os.environ.get('NUCLEI_CONCURRENCY', 50))
 NUCLEI_TIMEOUT     = int(os.environ.get('NUCLEI_TIMEOUT', 10))
 NUCLEI_RETRIES     = int(os.environ.get('NUCLEI_RETRIES', 2))
 
-# Katana
 KATANA_DEPTH       = int(os.environ.get('KATANA_DEPTH', 3))
 
-# Dalfox
 DALFOX_TIMEOUT     = int(os.environ.get('DALFOX_TIMEOUT', 10))
 
-# SQLMap
 SQLMAP_RISK        = int(os.environ.get('SQLMAP_RISK', 2))
 SQLMAP_LEVEL       = int(os.environ.get('SQLMAP_LEVEL', 3))
 SQLMAP_THREADS     = int(os.environ.get('SQLMAP_THREADS', 4))
 
-# FFuf (FFUF_MAXTIME já definido abaixo — mantém compatibilidade)
-
-# GAU
 GAU_BLACKLIST      = os.environ.get(
     'GAU_BLACKLIST',
     'png,jpg,jpeg,gif,css,svg,woff,woff2,ico,ttf,eot'
 )
 
 
-
 def scan_ffuf(target_url):
+    """Roda FFuf para descobrir diretórios. Retorna lista de paths achados."""
     try:
         target_url = _sanitize_url(target_url)
     except ValueError as e:
@@ -690,10 +633,10 @@ def scan_ffuf(target_url):
         f"ffuf -u {target_url}/FUZZ -w /opt/wordlists/common.txt "
         f"-mc 200,204,301,302,307,403 -o {output} -of json -s "
         f"-t 40 -ac "
-        f"-timeout 8 "           # timeout de conexão por requisição (segundos)
-        f"-maxtime {FFUF_MAXTIME} "   # para o scan inteiro após N segundos
-        f"-maxtime-job {FFUF_MAXTIME}",  # para cada job individual
-        timeout=FFUF_MAXTIME + 15,   # processo tem +15s de margem antes do SIGKILL
+        f"-timeout 8 "
+        f"-maxtime {FFUF_MAXTIME} "
+        f"-maxtime-job {FFUF_MAXTIME}",
+        timeout=FFUF_MAXTIME + 15,
     )
 
     paths = []
@@ -723,22 +666,17 @@ def scan_ffuf(target_url):
     return paths
 
 
-# ---------------------------------------------------------------------------
-# crt.sh — com cache Redis (30 dias)
-# ---------------------------------------------------------------------------
-
-_CRTSH_CACHE_TTL = 60 * 60 * 24 * 30  # 30 dias
+_CRTSH_CACHE_TTL = 60 * 60 * 24 * 30
 
 
 def get_first_seen_crtsh(subdomain: str):
-    """
-    Consulta crt.sh para data do certificado mais antigo.
-    Resultado cacheado no Redis por 30 dias para evitar rate limiting.
-    Retorna string 'YYYY-MM-DD' ou None.
+    """Consulta crt.sh para a data do certificado mais antigo do subdomínio.
+
+    Resultado cacheado no Redis por 30 dias (TTL) — crt.sh rate-limita
+    pesado. Retorna 'YYYY-MM-DD' ou None.
     """
     cache_key = f"crtsh:{subdomain}"
 
-    # Tenta cache
     try:
         r = _get_redis()
         if r:
@@ -749,7 +687,6 @@ def get_first_seen_crtsh(subdomain: str):
     except Exception as e:
         print(f"[CACHE] Redis get falhou: {e}")
 
-    # Consulta real
     result = None
     print(f"[SCANNER] crt.sh para {subdomain}...")
     try:
@@ -763,7 +700,7 @@ def get_first_seen_crtsh(subdomain: str):
     except Exception as e:
         print(f"[SCANNER] crt.sh falhou em {subdomain}: {e}")
 
-    # Salva no cache (incluindo resultado None como sentinela)
+    # Cacheia também o resultado None como sentinela '__null__'.
     try:
         r = _get_redis()
         if r:

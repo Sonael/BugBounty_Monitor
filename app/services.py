@@ -1,19 +1,11 @@
-"""
-services.py — Camada de lógica de negócio.
-
-Extrai cálculos que eram duplicados entre rotas (dashboard vs htmx_stats)
-e centraliza queries pesadas para facilitar testes e manutenção.
-"""
+"""Camada de lógica de negócio — agregações e queries pesadas."""
 from . import db
 from .models import Project, Domain, Vulnerability
 from sqlalchemy import func
 
 
 def get_user_stats(user_id: int) -> dict:
-    """
-    Retorna contadores globais para o dashboard de um usuário.
-    Usa COUNT no banco (sem carregar objetos na memória).
-    """
+    """Retorna contadores globais (projetos, subs, vulns, scans ativos) do usuário."""
     total_projects = Project.query.filter_by(user_id=user_id).count()
 
     total_subs = (
@@ -45,10 +37,7 @@ def get_user_stats(user_id: int) -> dict:
 
 
 def get_severity_stats(user_id: int) -> dict:
-    """
-    Retorna distribuição de severidade de vulnerabilidades para um usuário.
-    Normaliza para lowercase e calcula percentuais.
-    """
+    """Retorna distribuição de severidade das vulns do usuário (com percentuais)."""
     severity_query = (
         db.session.query(Vulnerability.severity, func.count(Vulnerability.id))
         .join(Domain)
@@ -88,9 +77,9 @@ def get_severity_stats(user_id: int) -> dict:
 
 
 def get_project_domain_stats(project_id: int) -> dict:
-    """
-    Retorna estatísticas de domínios de um projeto sem carregar todos os objetos.
-    Usa GROUP BY no banco.
+    """Retorna contadores por faixa de status HTTP de um projeto.
+
+    Faz GROUP BY no banco — não carrega os domínios na memória.
     """
     from sqlalchemy import case
 
@@ -112,17 +101,15 @@ def get_project_domain_stats(project_id: int) -> dict:
 
 
 def get_all_projects_card_stats(project_ids: list) -> dict:
-    """
-    Retorna contadores de status HTTP e vulnerabilidades para uma lista de projetos
-    em UMA ÚNICA query cada, sem carregar nenhum objeto Domain na memória.
-    Retorna dict: { project_id: { '2xx', '3xx', '4xx', '5xx', 'total', 'vulns', 'pendentes' } }
+    """Calcula stats de domínios e vulns para vários projetos em 2 queries.
+
+    Retorna dict { project_id: { '2xx', '3xx', '4xx', '5xx', 'total', 'vulns', 'pendentes' } }.
     """
     if not project_ids:
         return {}
 
     from sqlalchemy import case, and_
 
-    # --- Contadores de domínios ---
     domain_rows = db.session.query(
         Domain.project_id,
         func.count(Domain.id).label('total'),
@@ -133,7 +120,7 @@ def get_all_projects_card_stats(project_ids: list) -> dict:
         func.sum(case((
             and_(
                 Domain.scanned_vulns == False,
-                Domain.status_code.in_([200, 201, 202, 204, 301, 302, 307, 308])
+                Domain.status_code.in_([200, 201, 202, 204, 301, 302, 307, 308, 403])
             ), 1), else_=0
         )).label('pendentes'),
     ).filter(Domain.project_id.in_(project_ids)).group_by(Domain.project_id).all()
@@ -150,7 +137,6 @@ def get_all_projects_card_stats(project_ids: list) -> dict:
             'vulns':    0,
         }
 
-    # --- Contadores de vulnerabilidades ---
     from .models import Vulnerability
     vuln_rows = db.session.query(
         Domain.project_id,
@@ -163,7 +149,6 @@ def get_all_projects_card_stats(project_ids: list) -> dict:
         if row.project_id in result:
             result[row.project_id]['vulns'] = row.total_vulns or 0
 
-    # Garante entrada para projetos sem nenhum domínio
     for pid in project_ids:
         if pid not in result:
             result[pid] = {'total': 0, 'c2xx': 0, 'c3xx': 0,

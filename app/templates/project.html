@@ -52,7 +52,9 @@
                 <form id="form-mark-scanned"
                       action="{{ url_for('main.mark_all_scanned', id=project.id) }}"
                       method="POST"
-                      class="d-none"></form>
+                      class="d-none">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                </form>
 
                 <button type="button" 
                         class="btn btn-outline-primary btn-sm fw-bold shadow-sm"
@@ -318,6 +320,14 @@
                 </div>
 
                 <div id="history-content" class="d-none">
+                    <div class="d-flex justify-content-end mb-2">
+                        <button type="button"
+                                class="btn btn-sm btn-outline-secondary"
+                                onclick="loadHistory(true)"
+                                aria-label="Recarregar histórico">
+                            <i class="fas fa-sync-alt me-1" aria-hidden="true"></i>Recarregar
+                        </button>
+                    </div>
                     <div class="table-responsive rounded border">
                         <table class="table table-hover align-middle mb-0">
                             <thead class="table-light">
@@ -376,6 +386,7 @@
             <footer class="modal-footer bg-light">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
                 <form action="{{ url_for('main.delete_project', id=project.id) }}" method="POST" class="d-inline">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <button type="submit" class="btn btn-danger fw-bold">Sim, Apagar Tudo</button>
                 </form>
             </footer>
@@ -391,6 +402,7 @@
      aria-hidden="true">
     <div class="modal-dialog modal-lg">
         <form method="POST" action="{{ url_for('main.edit_project', id=project.id) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <div class="modal-content border-0 shadow-lg">
                 <header class="modal-header bg-primary text-white">
                     <h2 class="modal-title fw-bold h5" id="editModalLabel">
@@ -576,7 +588,9 @@
                     container: 'body',
                     html: true,
                     trigger: 'focus',
-                    sanitize: false
+                    // sanitize:true (default) — bloqueia XSS via technologies/ports
+                    // controladas por respostas HTTP de alvos escaneados.
+                    sanitize: true
                 });
 
                 el.addEventListener('shown.bs.popover', function () {
@@ -727,7 +741,11 @@
                         });
                     }
                 } else {
-                    const [key, partialVal] = val.split(':');
+                    // split(':', 1) só pega o primeiro ":" — preserva valores
+                    // como "Apache:2.4" ou intervalos de data com ":".
+                    const colonIdx = val.indexOf(':');
+                    const key = val.substring(0, colonIdx);
+                    const partialVal = val.substring(colonIdx + 1);
                     const cleanKey = key.toLowerCase();
                     let list = [];
 
@@ -744,28 +762,42 @@
 
                     if (list) {
                         list.filter(v => v.toString().toLowerCase().includes(filterTerm.toLowerCase())).forEach(v => {
+                            const safeV = escapeHTML(String(v));
+                            const safeKey = escapeHTML(key);
                             matches.push({
                                 text: `${key}:${v}`,
-                                display: `<span class="suggestion-icon">${icons[key + ':'] || '🔸'}</span> <span class="text-muted">${key}:</span> <span class="fw-bold text-dark ms-1">${v}</span>`,
+                                display: `<span class="suggestion-icon">${icons[key + ':'] || '🔸'}</span> <span class="text-muted">${safeKey}:</span> <span class="fw-bold text-dark ms-1">${safeV}</span>`,
                                 type: 'value',
-                                rawValue: v
+                                rawValue: String(v)
                             });
                         });
                     }
                 }
 
                 if (matches.length > 0) {
-                    suggestionBox.innerHTML = matches.map(m =>
-                        `<div class="list-group-item list-group-item-action d-flex align-items-center" 
-                        style="cursor:pointer;"
-                        onclick="applySuggestion('${m.text}', '${m.type}', '${m.rawValue}')">
-                        ${m.display}
-                    </div>`
-                    ).join('');
+                    suggestionBox.innerHTML = '';
+                    matches.forEach(m => {
+                        const item = document.createElement('div');
+                        item.className = 'list-group-item list-group-item-action d-flex align-items-center';
+                        item.style.cursor = 'pointer';
+                        item.innerHTML = m.display;
+                        // Event listener evita quebra com aspas/HTML em m.text/rawValue
+                        item.addEventListener('click', () => {
+                            applySuggestion(m.text, m.type, m.rawValue);
+                        });
+                        suggestionBox.appendChild(item);
+                    });
                     suggestionBox.classList.remove('d-none');
                 } else {
                     suggestionBox.classList.add('d-none');
                 }
+            }
+
+            function escapeHTML(s) {
+                return s.replace(/[&<>"']/g, c => ({
+                    '&': '&amp;', '<': '&lt;', '>': '&gt;',
+                    '"': '&quot;', "'": '&#39;'
+                }[c]));
             }
 
             input.addEventListener('keyup', (e) => {
@@ -802,15 +834,18 @@
                     updateSuggestions();
                 } else {
                     const currentInput = input.value;
-                    if (currentInput.includes(',') && currentInput.includes(':')) {
-                        const [k, v] = currentInput.split(':');
-                        const parts = v.split(',');
-                        parts.pop();
-                        parts.push(rawValue);
-                        input.value = `${k}:${parts.join(',')},`;
-                    } else if (currentInput.includes(':')) {
-                        const [k, v] = currentInput.split(':');
-                        input.value = `${k}:${rawValue},`;
+                    const colonIdx = currentInput.indexOf(':');
+                    if (colonIdx >= 0) {
+                        const k = currentInput.substring(0, colonIdx);
+                        const v = currentInput.substring(colonIdx + 1);
+                        if (v.includes(',')) {
+                            const parts = v.split(',');
+                            parts.pop();
+                            parts.push(rawValue);
+                            input.value = `${k}:${parts.join(',')},`;
+                        } else {
+                            input.value = `${k}:${rawValue},`;
+                        }
                     }
                     input.focus();
                     updateSuggestions();
@@ -844,22 +879,38 @@
             };
 
             function renderChips() {
-                chipsArea.innerHTML = activeFilters.map((filter, index) => {
-                    let displayHTML = filter;
-                    if (filter.includes(':')) {
-                        const [k, v] = filter.split(':');
+                chipsArea.innerHTML = '';
+                activeFilters.forEach((filter, index) => {
+                    const chip = document.createElement('div');
+                    chip.className = 'search-chip';
+
+                    const colonIdx = filter.indexOf(':');
+                    if (colonIdx >= 0) {
+                        const k = filter.substring(0, colonIdx);
+                        const v = filter.substring(colonIdx + 1);
                         let formattedVal = v.replace(/,/g, ', ');
                         if (v.includes(' to ')) formattedVal = v.replace(' to ', ' ➝ ');
 
-                        displayHTML = `<span class="chip-key">${k}:</span><span class="chip-val">${formattedVal}</span>`;
+                        const kSpan = document.createElement('span');
+                        kSpan.className = 'chip-key';
+                        kSpan.textContent = k + ':';
+                        const vSpan = document.createElement('span');
+                        vSpan.className = 'chip-val';
+                        vSpan.textContent = formattedVal;
+                        chip.appendChild(kSpan);
+                        chip.appendChild(vSpan);
+                    } else {
+                        chip.textContent = filter;
                     }
-                    return `
-                    <div class="search-chip">
-                        ${displayHTML}
-                        <i class="fas fa-times ms-2 text-muted" style="cursor:pointer; font-size:0.8em;" onclick="removeChip(${index})"></i>
-                    </div>
-                `;
-                }).join('');
+
+                    const closeBtn = document.createElement('i');
+                    closeBtn.className = 'fas fa-times ms-2 text-muted';
+                    closeBtn.style.cssText = 'cursor:pointer; font-size:0.8em;';
+                    closeBtn.addEventListener('click', () => removeChip(index));
+                    chip.appendChild(closeBtn);
+
+                    chipsArea.appendChild(chip);
+                });
             }
 
             function triggerSearch() {
@@ -888,8 +939,8 @@
     // ── Histórico de Scans ──────────────────────────────────────────────────
     let historyLoaded = false;
 
-    window.loadHistory = function() {
-        if (historyLoaded) return;
+    window.loadHistory = function(force) {
+        if (historyLoaded && !force) return;
         historyLoaded = true;
 
         const projectId = {{ project.id }};
@@ -897,6 +948,13 @@
         const loading = document.getElementById('history-loading');
         const content = document.getElementById('history-content');
         const empty = document.getElementById('history-empty');
+
+        // Em reload, mostra spinner novamente
+        if (force) {
+            loading.classList.remove('d-none');
+            content.classList.add('d-none');
+            empty.classList.add('d-none');
+        }
 
         fetch(`/api/project/${projectId}/history`)
             .then(r => r.json())

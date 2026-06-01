@@ -4,17 +4,20 @@ from datetime import datetime
 
 
 class User(UserMixin, db.Model):
+    """Usuário do sistema (admin/operador)."""
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(100), unique=True, nullable=False)
     password = db.Column(db.String(255), nullable=False)
 
 
 class SystemState(db.Model):
+    """Estado global de execução — usado para idempotência do scan diário."""
     id = db.Column(db.Integer, primary_key=True)
     last_daily_scan = db.Column(db.Date, nullable=True)
 
 
 class Project(db.Model):
+    """Projeto de bug-bounty: agrupa um conjunto de domínios sob o mesmo alvo."""
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False)
     target_url = db.Column(db.String(200), nullable=False)
@@ -31,7 +34,6 @@ class Project(db.Model):
     scan_histories = db.relationship('ScanHistory', backref='project', lazy=True,
                                      cascade="all, delete-orphan", order_by="ScanHistory.started_at.desc()")
 
-    # Limites de tamanho para evitar payloads malformados quebrarem o fnmatch
     out_of_scope = db.Column(db.Text(), default="")
     in_scope = db.Column(db.Text(), default="")
     discovery_enabled = db.Column(db.Boolean, default=True)
@@ -43,9 +45,9 @@ class Project(db.Model):
 
 
 class Domain(db.Model):
+    """Subdomínio descoberto pertencente a um projeto."""
     __tablename__ = 'domain'
 
-    # Índices compostos para acelerar as queries mais frequentes
     __table_args__ = (
         db.Index('ix_domain_project_status', 'project_id', 'status_code'),
         db.Index('ix_domain_project_first_seen', 'project_id', 'first_seen'),
@@ -62,8 +64,7 @@ class Domain(db.Model):
     project_id = db.Column(db.Integer, db.ForeignKey('project.id'), nullable=False)
     vulnerabilities = db.relationship('Vulnerability', backref='domain', lazy=True, cascade="all, delete-orphan")
 
-    # open_ports mantido como campo texto para compatibilidade com templates existentes.
-    # Novos dados são gravados também na tabela Port (normalizada) para queries precisas.
+    # Texto mantido para compatibilidade com templates; tabela Port é a fonte canônica.
     open_ports = db.Column(db.Text, nullable=True)
     ports = db.relationship('Port', backref='domain', lazy=True, cascade="all, delete-orphan")
 
@@ -74,11 +75,7 @@ class Domain(db.Model):
 
 
 class Port(db.Model):
-    """
-    Tabela normalizada de portas abertas por domínio.
-    Permite queries exatas como: Domain.ports.any(Port.port_number == 443)
-    em vez do ILIKE frágil sobre o campo texto open_ports.
-    """
+    """Porta aberta por domínio — tabela normalizada para queries exatas."""
     __tablename__ = 'port'
     __table_args__ = (
         db.UniqueConstraint('domain_id', 'port_number', name='uq_domain_port'),
@@ -93,6 +90,7 @@ class Port(db.Model):
 
 
 class Vulnerability(db.Model):
+    """Vulnerabilidade detectada em um domínio (Nuclei/Dalfox/SQLMap/...)."""
     id = db.Column(db.Integer, primary_key=True)
     tool = db.Column(db.String(50), nullable=False)
     severity = db.Column(db.String(20), nullable=True)
@@ -102,9 +100,9 @@ class Vulnerability(db.Model):
 
 
 class ScanHistory(db.Model):
-    """
-    Registro imutável de cada execução de scan.
-    Permite comparar superfície de ataque entre runs (novos domínios, vulns, etc).
+    """Registro imutável de cada execução de scan.
+
+    Usado para comparar superfície de ataque entre runs (novos domínios, vulns, etc).
     """
     __tablename__ = 'scan_history'
     __table_args__ = (
@@ -118,22 +116,20 @@ class ScanHistory(db.Model):
     started_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     finished_at = db.Column(db.DateTime, nullable=True)
 
-    mode = db.Column(db.String(20), nullable=False)  # recon, full, vuln, baseline
-    # running → completed | error | stopped
+    mode = db.Column(db.String(20), nullable=False)
     status = db.Column(db.String(20), default='running', nullable=False)
 
-    # Métricas capturadas ao final
     new_domains = db.Column(db.Integer, default=0)
     total_domains = db.Column(db.Integer, default=0)
     alive_hosts = db.Column(db.Integer, default=0)
     new_vulns = db.Column(db.Integer, default=0)
     total_vulns = db.Column(db.Integer, default=0)
 
-    # Resumo livre em JSON (ex: contagens por severidade, ferramentas usadas)
     summary = db.Column(db.Text, nullable=True)
 
     @property
     def duration_minutes(self):
+        """Retorna duração em minutos (1 casa decimal) ou None se não finalizado."""
         if self.finished_at and self.started_at:
             return round((self.finished_at - self.started_at).total_seconds() / 60, 1)
         return None

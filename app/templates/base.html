@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="description" content="BugBounty Monitor - Plataforma profissional de monitoramento de segurança">
+    <meta name="csrf-token" content="{{ csrf_token() }}">
     <title>BugBounty Monitor</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🛡️</text></svg>">
     
@@ -107,6 +108,29 @@
     <script src="https://npmcdn.com/flatpickr/dist/l10n/pt.js"></script>
     
     <script>
+        // ── CSRF: injeta token em todas as requisições HTMX e fetch ──────
+        (function() {
+            const meta = document.querySelector('meta[name="csrf-token"]');
+            const token = meta ? meta.getAttribute('content') : '';
+            if (!token) return;
+
+            // HTMX: adiciona header em todo request
+            document.body.addEventListener('htmx:configRequest', (evt) => {
+                evt.detail.headers['X-CSRFToken'] = token;
+            });
+
+            // fetch: wrapper que injeta o header em chamadas mutantes
+            const _fetch = window.fetch;
+            window.fetch = function(input, init) {
+                init = init || {};
+                const method = (init.method || (typeof input === 'object' && input.method) || 'GET').toUpperCase();
+                if (!['GET', 'HEAD', 'OPTIONS', 'TRACE'].includes(method)) {
+                    init.headers = Object.assign({}, init.headers || {}, { 'X-CSRFToken': token });
+                }
+                return _fetch.call(this, input, init);
+            };
+        })();
+
         document.addEventListener("DOMContentLoaded", function() {
             // Auto-close alerts configuration
             const setupAlertAutoClose = () => {
